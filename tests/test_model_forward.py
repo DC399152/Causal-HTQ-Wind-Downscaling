@@ -2,15 +2,34 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
+from src.models.htq_transformer import CausalHTQTransformer
 
 
-def test_phase0_model_forward_shape_and_zero_residual():
-    model = CausalHTQTransformer(HTQConfig(context_hours=6, target_steps=6, input_channels=2, output_channels=2))
-    x = torch.randn(3, 6, 8, 2)
+def test_causal_htq_transformer_minimal_forward_shapes():
+    torch.manual_seed(0)
+    model = CausalHTQTransformer()
+    model.eval()
+    x_hourly = torch.randn(2, 6, 6, 2)
+    x_mask = torch.ones(2, 6, 6, 2, dtype=torch.bool)
 
-    out = model(x)
+    with torch.no_grad():
+        out = model(x_hourly, x_mask)
 
-    assert out["pred"].shape == (3, 6, 8, 2)
-    assert out["residual"].shape == (3, 6, 8, 2)
-    assert torch.allclose(out["residual"].mean(dim=1), torch.zeros(3, 8, 2))
+    assert set(out) == {"pred", "residual", "encoder_memory"}
+    assert out["pred"].shape == (2, 6, 6, 2)
+    assert out["residual"].shape == (2, 6, 6, 2)
+    assert out["encoder_memory"].shape == (2, 36, 64)
+
+
+def test_causal_htq_transformer_prediction_is_current_hourly_plus_residual():
+    torch.manual_seed(1)
+    model = CausalHTQTransformer()
+    model.eval()
+    x_hourly = torch.randn(2, 6, 6, 2)
+    x_mask = torch.ones(2, 6, 6, 2, dtype=torch.bool)
+
+    with torch.no_grad():
+        out = model(x_hourly, x_mask)
+
+    expected = x_hourly[:, -1].unsqueeze(1) + out["residual"]
+    assert torch.allclose(out["pred"], expected, atol=1e-6)

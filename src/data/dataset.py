@@ -1,36 +1,253 @@
-"""Dataset interface for generated Causal HTQ arrays."""
+"""PyTorch dataset interface for generated Causal HTQ arrays."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
+
+import numpy as np
+
+
+DEFAULT_DATASET_DIR = Path("data/datasets/ds_paris_1h_to_10min_6h_causal_start_v1")
+DEFAULT_NORM_STATS_NAME = "norm_stats.json"
+VALID_SPLITS = {"train", "val", "test", "gap", "all"}
 
 
 @dataclass(frozen=True)
 class SampleShapes:
-    """Semantic sample shapes."""
+    """Semantic sample shapes, excluding batch dimension."""
 
     input_context: tuple[int, int, int]
     target_10min: tuple[int, int, int]
 
 
-class WindDownscalingDataset:
-    """Minimal dataset wrapper for generated artifacts.
+def require_torch():
+    """Import torch lazily so preprocessing remains NumPy-only."""
 
-    Expected sample semantics:
-    - input: [L, H, C]
-    - target: [T_out, H, C]
+    try:
+        import torch
+    except ImportError as exc:
+        raise RuntimeError("PyTorch is required to use WindDownscalingDataset.") from exc
+    return torch
+
+
+def load_metadata(dataset_dir: str | Path) -> dict[str, Any]:
+    """Load dataset metadata JSON when present."""
+
+    path = Path(dataset_dir) / "metadata.json"
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_split_indices(dataset_dir: str | Path, split: str) -> np.ndarray:
+    """Load integer sample indices for a split file.
+
+    ``split="all"`` returns all indices from ``dataset.npz``. The ``gap`` split
+    is explicit and can be inspected, but training code should normally use
+    train/val/test only.
     """
 
-    def __init__(self, dataset_dir: str | Path, split: str = "train") -> None:
+    dataset_dir = Path(dataset_dir)
+    if split not in VALID_SPLITS:
+        raise ValueError(f"Unknown split {split!r}. Expected one of {sorted(VALID_SPLITS)}")
+
+    if split == "all":
+        with np.load(dataset_dir / "dataset.npz", allow_pickle=True) as data:
+            return np.arange(data["x_hourly"].shape[0], dtype=np.int64)
+
+    split_path = dataset_dir / "splits" / f"{split}.txt"
+    if not split_path.exists():
+        raise FileNotFoundError(f"Split file not found: {split_path}")
+    lines = [line.strip() for line in split_path.read_text(encoding="utf-8").splitlines()]
+    return np.asarray([int(line) for line in lines if line], dtype=np.int64)
+
+
+def _as_tensor(array: np.ndarray, dtype=None):
+    torch = require_torch()
+    tensor = torch.from_numpy(np.asarray(array))
+    if dtype is not None:
+        tensor = tensor.to(dtype=dtype)
+    return tensor
+
+
+def load_norm_stats(path: str | Path) -> dict[str, Any]:
+    """Load normalization stats JSON."""
+
+    with Path(path).open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _normalize_array(
+    values: np.ndarray,
+    mask: np.ndarray,
+    mean: np.ndarray,
+    std: np.ndarray,
+) -> np.ndarray:
+    """Apply per-channel z-score and zero invalid positions.
+
+    ``values`` and ``mask`` share a semantic shape ending in channel. ``mean``
+    and ``std`` have shape [C].
+    """
+
+    normalized = (values.astype(np.float32) - mean) / std
+    return np.where(mask.astype(bool), normalized, 0.0).astype(np.float32)
+
+
+class WindDownscalingDataset:
+    """Dataset wrapper for generated `.npz` artifacts.
+
+    Returned tensor shapes for one sample:
+    - ``x_hourly``: [L, H, C]
+    - ``x_mask``: [L, H, C]
+    - ``y_10min``: [T_out, H, C]
+    - ``y_mask``: [T_out, H, C]
+    - ``current_hourly``: [H, C]
+    """
+
+    def __init__(
+        self,
+        dataset_dir: str | Path = DEFAULT_DATASET_DIR,
+        split: str = "train",
+        *,
+        return_metadata: bool = True,
+        load_into_memory: bool = True,
+        normalize: bool = False,
+        norm_stats_path: str | Path | None = None,
+    ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.split = split
-        self._samples: list[dict[str, Any]] = []
+        self.return_metadata = return_metadata
+        self.load_into_memory = load_into_memory
+        self.normalize = normalize
+        self.dataset_path = self.dataset_dir / "dataset.npz"
+        if not self.dataset_path.exists():
+            raise FileNotFoundError(f"Dataset file not found: {self.dataset_path}")
+
+        self.metadata = load_metadata(self.dataset_dir)
+        self.norm_stats_path = Path(norm_stats_path) if norm_stats_path else self.dataset_dir / DEFAULT_NORM_STATS_NAME
+        self.norm_stats = load_norm_stats(self.norm_stats_path) if normalize else None
+        self.indices = load_split_indices(self.dataset_dir, split)
+        self._npz = None
+        if load_into_memory:
+            with np.load(self.dataset_path, allow_pickle=True) as data:
+                self.arrays = {key: data[key] for key in data.files}
+        else:
+            self.arrays = None
+
+        self._validate_required_keys()
+
+    def _data(self):
+        if self.arrays is not None:
+            return self.arrays
+        if self._npz is None:
+            self._npz = np.load(self.dataset_path, allow_pickle=True)
+        return self._npz
+
+    def close(self) -> None:
+        """Close lazy NPZ handle if one is open."""
+
+        if self._npz is not None:
+            self._npz.close()
+            self._npz = None
+
+    def _validate_required_keys(self) -> None:
+        required = {
+            "x_hourly",
+            "x_mask",
+            "y_10min",
+            "y_mask",
+            "current_hourly",
+            "station_id",
+            "target_time_start",
+            "target_times_10min",
+            "height_values",
+            "source_file",
+            "split",
+        }
+        data = self._data()
+        missing = sorted(required - set(data.keys()))
+        if missing:
+            raise KeyError(f"Dataset is missing required keys: {missing}")
 
     def __len__(self) -> int:
-        return len(self._samples)
+        return int(self.indices.shape[0])
+
+    @property
+    def sample_shapes(self) -> SampleShapes:
+        data = self._data()
+        return SampleShapes(
+            input_context=tuple(int(v) for v in data["x_hourly"].shape[1:]),
+            target_10min=tuple(int(v) for v in data["y_10min"].shape[1:]),
+        )
 
     def __getitem__(self, index: int) -> dict[str, Any]:
-        return self._samples[index]
+        data = self._data()
+        sample_index = int(self.indices[index])
+        x_hourly = data["x_hourly"][sample_index]
+        x_mask = data["x_mask"][sample_index].astype(bool)
+        y_10min = data["y_10min"][sample_index]
+        y_mask = data["y_mask"][sample_index].astype(bool)
+        current_hourly = data["current_hourly"][sample_index]
 
+        if self.normalize:
+            if self.norm_stats is None:
+                raise RuntimeError("normalize=True but norm_stats were not loaded")
+            x_mean = np.asarray(self.norm_stats["x_mean"], dtype=np.float32)
+            x_std = np.asarray(self.norm_stats["x_std"], dtype=np.float32)
+            y_mean = np.asarray(self.norm_stats["y_mean"], dtype=np.float32)
+            y_std = np.asarray(self.norm_stats["y_std"], dtype=np.float32)
+            x_hourly = _normalize_array(x_hourly, x_mask, x_mean, x_std)
+            y_10min = _normalize_array(y_10min, y_mask, y_mean, y_std)
+            current_hourly = _normalize_array(current_hourly, x_mask[-1], x_mean, x_std)
+
+        item: dict[str, Any] = {
+            "x_hourly": _as_tensor(x_hourly, dtype=require_torch().float32),
+            "x_mask": _as_tensor(x_mask, dtype=require_torch().bool),
+            "y_10min": _as_tensor(y_10min, dtype=require_torch().float32),
+            "y_mask": _as_tensor(y_mask, dtype=require_torch().bool),
+            "current_hourly": _as_tensor(current_hourly, dtype=require_torch().float32),
+            "sample_index": sample_index,
+        }
+
+        if self.return_metadata:
+            item.update(
+                {
+                    "station_id": str(data["station_id"][sample_index]),
+                    "target_time_start": str(data["target_time_start"][sample_index]),
+                    "target_times_10min": [
+                        str(v) for v in data["target_times_10min"][sample_index]
+                    ],
+                    "height_values": _as_tensor(
+                        data["height_values"][sample_index],
+                        dtype=require_torch().float32,
+                    ),
+                    "source_file": str(data["source_file"][sample_index]),
+                    "split": str(data["split"][sample_index]),
+                }
+            )
+
+        return item
+
+
+def available_splits(dataset_dir: str | Path = DEFAULT_DATASET_DIR) -> dict[str, int]:
+    """Return split sizes from split files."""
+
+    dataset_dir = Path(dataset_dir)
+    result: dict[str, int] = {}
+    for split_path in sorted((dataset_dir / "splits").glob("*.txt")):
+        indices = load_split_indices(dataset_dir, split_path.stem)
+        result[split_path.stem] = int(indices.shape[0])
+    return result
+
+
+def iter_split_datasets(
+    dataset_dir: str | Path = DEFAULT_DATASET_DIR,
+    splits: Iterable[str] = ("train", "val", "test"),
+) -> dict[str, WindDownscalingDataset]:
+    """Create datasets for several splits."""
+
+    return {split: WindDownscalingDataset(dataset_dir, split=split) for split in splits}

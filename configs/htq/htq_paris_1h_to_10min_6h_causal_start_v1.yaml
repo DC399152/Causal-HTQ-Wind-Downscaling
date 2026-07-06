@@ -18,16 +18,19 @@ model:
   encoder_layers: 4
   decoder_layers: 2
   dropout: 0.1
-  predict_zero_mean_residual: true
+  predict_residual: true
+  enforce_zero_mean_residual: false
   residual_reference: current_hourly
 
 training:
-  # TODO: Training is intentionally not implemented in Phase 0.
   batch_size: 32
   max_epochs: null
   learning_rate: null
   seed: 42
 
 loss:
-  primary: mse
-  zero_mean_constraint_weight: 1.0
+  primary: weighted_l1
+  lambda_l1: 1.0
+  lambda_temporal: 0.2
+  lambda_vertical: 0.05
+  computed_in: normalized_space
