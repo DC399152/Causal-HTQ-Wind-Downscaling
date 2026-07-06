@@ -1,0 +1,33 @@
+experiment_name: htq_paris_1h_to_10min_6h_causal_start_v1
+dataset_name: ds_paris_1h_to_10min_6h_causal_start_v1
+
+data:
+  dataset_dir: data/datasets/ds_paris_1h_to_10min_6h_causal_start_v1
+  context_hours: 6
+  target_steps: 6
+  tensor_semantics:
+    inputs: "[B, L, H, C]"
+    targets: "[B, T_out, H, C]"
+
+model:
+  name: CausalHTQTransformer
+  input_channels: 2
+  output_channels: 2
+  d_model: 128
+  n_heads: 4
+  encoder_layers: 4
+  decoder_layers: 2
+  dropout: 0.1
+  predict_zero_mean_residual: true
+  residual_reference: current_hourly
+
+training:
+  # TODO: Training is intentionally not implemented in Phase 0.
+  batch_size: 32
+  max_epochs: null
+  learning_rate: null
+  seed: 42
+
+loss:
+  primary: mse
+  zero_mean_constraint_weight: 1.0

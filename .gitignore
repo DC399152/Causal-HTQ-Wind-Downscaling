@@ -3,7 +3,12 @@ __pycache__/
 .venv/
 .env
 outputs/
-data/raw/
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/datasets/*
+!data/datasets/.gitkeep
 data/interim/
 *.nc
 *.pt

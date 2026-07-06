@@ -1,0 +1,73 @@
+dataset_name: ds_paris_1h_to_10min_6h_causal_start_v1
+
+paths:
+  raw_dir: data/raw
+  raw_3600s_dir: data/raw
+  raw_600s_dir: data/raw
+  processed_dir: data/processed
+  dataset_dir: data/datasets/ds_paris_1h_to_10min_6h_causal_start_v1
+
+time:
+  timestamp_semantics: start
+  # Output dataset timestamps are always interval starts. Keep this as "start"
+  # unless inspect_raw_nc.py confirms raw files are truly encoded as interval end.
+  raw_timestamp_semantics: start
+  input_frequency_seconds: 3600
+  target_frequency_seconds: 600
+  target_steps_per_hour: 6
+  context_hours: 6
+  causal_context: true
+  context_alignment: causal_last
+  target_offsets_minutes: [0, 10, 20, 30, 40, 50]
+
+variables:
+  # TODO: Verify with scripts/inspect_raw_nc.py before production runs.
+  time: time
+  height: altitude
+  station: station
+  station_lat: station_lat
+  station_lon: station_lon
+  station_altitude: station_altitude
+  station_height: station_height
+  hourly_channels: [u, v]
+  target_channels: [u, v]
+  qc_flags: []
+
+height_selection:
+  # TODO: Verify altitude convention and station altitude reference with inspect_raw_nc.py.
+  selected_heights_agl: [250, 275, 300, 325, 350, 375]
+  height_reference: agl_rounded_station_altitude
+  max_height_diff: 12.5
+
+features:
+  input_channels:
+    - u
+    - v
+  target_channels:
+    - u
+    - v
+
+quality_control:
+  missing_value: -999.0
+  allow_missing: true
+  max_missing_fraction_per_sample: 0.2
+  require_complete_target_hour: true
+  min_valid_ratio_x: 0.8
+  min_valid_ratio_x_per_hour: 0.8
+  min_valid_ratio_x_current_hour: 1.0
+  min_valid_ratio_y: 0.8
+  qc_policy:
+    use_flags: false
+    flag_thresholds: {}
+
+splits:
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  split_gap_hours: 24
+  split_by_unique_time: true
+  split_time_key: target_time_start
+
+output:
+  format: npz
+  save_metadata: true
