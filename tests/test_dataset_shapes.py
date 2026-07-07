@@ -23,6 +23,7 @@ def test_empty_dataset_builder_writes_required_shape_contract(tmp_path):
         raw_3600s_dir=tmp_path / "raw",
         raw_600s_dir=tmp_path / "raw",
         dataset_dir=tmp_path / "dataset",
+        meteo=replace(config.meteo, enabled=False),
     )
 
     summary = build_dataset(config, dry_run=False)

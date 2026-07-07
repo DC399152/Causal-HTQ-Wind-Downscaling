@@ -49,6 +49,12 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> HTQC
 
     data_cfg = config.get("data", {})
     model_cfg = config.get("model", {})
+    multimodal_cfg = config.get("multimodal", {})
+    meteo_cfg = config.get("meteo", {})
+    static_cfg = config.get("static", {})
+    fusion_cfg = config.get("fusion", {})
+    query_cfg = config.get("query_builder", {})
+    pressure_levels = tuple(int(v) for v in meteo_cfg.get("pressure_levels_hpa", [1000, 975, 950, 925, 900]))
     return HTQConfig(
         d_model=args.d_model or int(model_cfg.get("d_model", 64)),
         nhead=args.nhead or int(model_cfg.get("n_heads", model_cfg.get("nhead", 4))),
@@ -63,6 +69,25 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> HTQC
         height_levels=int(model_cfg.get("height_levels", 6)),
         input_channels=int(model_cfg.get("input_channels", 2)),
         output_channels=int(model_cfg.get("output_channels", 2)),
+        enforce_zero_mean_residual=bool(model_cfg.get("enforce_zero_mean_residual", False)),
+        use_meteo=bool(multimodal_cfg.get("use_meteo", model_cfg.get("use_meteo", False))),
+        use_static=bool(multimodal_cfg.get("use_static", model_cfg.get("use_static", False))),
+        meteo_context_hours=int(meteo_cfg.get("context_hours", data_cfg.get("context_hours", 6))),
+        meteo_pressure_levels_hpa=pressure_levels,
+        num_meteo_channels=int(meteo_cfg.get("num_meteo_channels", 2)),
+        meteo_use_delta=bool(meteo_cfg.get("use_delta", True)),
+        meteo_use_mask_channels=bool(meteo_cfg.get("use_mask_channels", False)),
+        fusion_nhead=int(fusion_cfg.get("nhead", model_cfg.get("n_heads", model_cfg.get("nhead", 4)))),
+        fusion_dropout=float(fusion_cfg.get("dropout", model_cfg.get("dropout", 0.1))),
+        fusion_gate_init_bias=float(fusion_cfg.get("gate_init_bias", -2.0)),
+        static_input_dim=int(static_cfg.get("input_dim", 17)),
+        static_n_tokens=int(static_cfg.get("n_static_tokens", 1)),
+        static_hidden_dim=int(static_cfg.get("hidden_dim", 128)),
+        static_dropout=float(static_cfg.get("dropout", model_cfg.get("dropout", 0.1))),
+        query_builder_type=str(query_cfg.get("type", model_cfg.get("query_builder_type", "context_conditioned"))),
+        query_use_context_projection=bool(query_cfg.get("use_context_projection", True)),
+        query_use_context_layernorm=bool(query_cfg.get("use_context_layernorm", True)),
+        query_use_trend_context=bool(query_cfg.get("use_trend_context", False)),
     )
 
 
@@ -100,6 +125,20 @@ def move_batch(batch: dict[str, Any], device):
     }
 
 
+def model_forward(model, batch: dict[str, Any]):
+    """Run HTQ with optional multimodal inputs when present in the batch."""
+
+    if "x_meteo" in batch or "x_static" in batch:
+        return model(
+            x_hourly=batch["x_hourly"],
+            x_mask=batch["x_mask"],
+            x_meteo=batch.get("x_meteo"),
+            meteo_mask=batch.get("meteo_mask"),
+            x_static=batch.get("x_static"),
+        )
+    return model(batch["x_hourly"], batch["x_mask"])
+
+
 def train_one_epoch(
     model,
     loader,
@@ -118,7 +157,7 @@ def train_one_epoch(
             break
         batch = move_batch(batch, device)
         optimizer.zero_grad(set_to_none=True)
-        out = model(batch["x_hourly"], batch["x_mask"])
+        out = model_forward(model, batch)
         loss_parts = htq_reconstruction_loss(
             out["pred"],
             batch["y_10min"],
@@ -167,7 +206,7 @@ def evaluate(
             if limit_batches is not None and batch_idx >= limit_batches:
                 break
             batch = move_batch(batch, device)
-            out = model(batch["x_hourly"], batch["x_mask"])
+            out = model_forward(model, batch)
             loss_parts = htq_reconstruction_loss(
                 out["pred"],
                 batch["y_10min"],
@@ -226,6 +265,30 @@ def loss_weights_from_config(config: dict[str, Any], args: argparse.Namespace) -
     }
 
 
+def early_stopping_config(config: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
+    """Read early-stopping settings.
+
+    Early stopping monitors validation MAE in physical m/s by default. Lower is
+    better, matching the checkpoint selection criterion used by this script.
+    """
+
+    training_cfg = config.get("training", {})
+    early_cfg = training_cfg.get("early_stopping", {})
+    patience = (
+        args.early_stopping_patience
+        if args.early_stopping_patience is not None
+        else early_cfg.get("patience")
+    )
+    return {
+        "enabled": patience is not None and int(patience) > 0,
+        "patience": int(patience) if patience is not None else None,
+        "min_delta": args.early_stopping_min_delta
+        if args.early_stopping_min_delta is not None
+        else float(early_cfg.get("min_delta", 0.0)),
+        "monitor": args.early_stopping_monitor or early_cfg.get("monitor", "MAE_ms"),
+    }
+
+
 def save_checkpoint(
     path: Path,
     model,
@@ -273,6 +336,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lambda-l1", type=float, default=None)
     parser.add_argument("--lambda-temporal", type=float, default=None)
     parser.add_argument("--lambda-vertical", type=float, default=None)
+    parser.add_argument(
+        "--early-stopping-patience",
+        type=int,
+        default=None,
+        help="Stop if validation monitor does not improve for this many epochs.",
+    )
+    parser.add_argument(
+        "--early-stopping-min-delta",
+        type=float,
+        default=None,
+        help="Minimum validation improvement required to reset patience.",
+    )
+    parser.add_argument(
+        "--early-stopping-monitor",
+        default=None,
+        help="Validation metric to monitor, e.g. MAE_ms or RMSE_ms. Lower is better.",
+    )
     return parser.parse_args()
 
 
@@ -289,6 +369,7 @@ def main() -> None:
     dataset_dir = args.dataset_dir or data_cfg.get("dataset_dir", DEFAULT_DATASET_DIR)
     run_dir = Path(args.run_dir)
     loss_weights = loss_weights_from_config(config, args)
+    early_stopping = early_stopping_config(config, args)
 
     set_seed(seed)
     torch = require_torch()
@@ -316,8 +397,19 @@ def main() -> None:
         f"lambda_vertical={loss_weights['lambda_vertical']})"
     )
     print("val/test metrics: denormalized physical m/s")
+    if early_stopping["enabled"]:
+        print(
+            "early stopping: "
+            f"monitor=val_{early_stopping['monitor']} "
+            f"patience={early_stopping['patience']} "
+            f"min_delta={early_stopping['min_delta']}"
+        )
 
-    best_val_mae = float("inf")
+    best_monitor = float("inf")
+    best_epoch = 0
+    epochs_without_improvement = 0
+    stopped_early = False
+    stop_reason = None
     history: list[dict[str, Any]] = []
     for epoch in range(1, max_epochs + 1):
         train_metrics = train_one_epoch(
@@ -348,9 +440,35 @@ def main() -> None:
         )
 
         save_checkpoint(run_dir / "last.pt", model, optimizer, epoch, row, model_config, loss_weights)
-        if val_metrics["MAE_ms"] < best_val_mae:
-            best_val_mae = val_metrics["MAE_ms"]
+        monitor_name = str(early_stopping["monitor"])
+        if monitor_name not in val_metrics:
+            raise KeyError(f"Validation metric {monitor_name!r} is not available")
+        monitor_value = float(val_metrics[monitor_name])
+        improved = monitor_value < best_monitor - float(early_stopping["min_delta"])
+        if improved:
+            best_monitor = monitor_value
+            best_epoch = epoch
+            epochs_without_improvement = 0
             save_checkpoint(run_dir / "best.pt", model, optimizer, epoch, row, model_config, loss_weights)
+        else:
+            epochs_without_improvement += 1
+
+        row["early_stopping_monitor"] = monitor_name
+        row["early_stopping_monitor_value"] = monitor_value
+        row["best_epoch"] = best_epoch
+        row["epochs_without_improvement"] = epochs_without_improvement
+
+        if (
+            early_stopping["enabled"]
+            and epochs_without_improvement >= int(early_stopping["patience"])
+        ):
+            stopped_early = True
+            stop_reason = (
+                f"val_{monitor_name} did not improve by "
+                f"{early_stopping['min_delta']} for {early_stopping['patience']} epochs"
+            )
+            print(f"early stopping at epoch {epoch:03d}: {stop_reason}")
+            break
 
     test_metrics = evaluate(
         model,
@@ -379,6 +497,13 @@ def main() -> None:
         "learning_rate": learning_rate,
         "loss_weights": loss_weights,
         "model_config": model_config.__dict__,
+        "early_stopping": {
+            **early_stopping,
+            "stopped_early": stopped_early,
+            "stop_reason": stop_reason,
+            "best_epoch": best_epoch,
+            "best_monitor_value": best_monitor,
+        },
         "history": history,
         "test": test_metrics,
         "loss_space": "normalized",

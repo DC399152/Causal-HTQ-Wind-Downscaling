@@ -23,11 +23,16 @@ def test_dataset_loader_returns_training_tensors():
     assert item["y_10min"].shape == (6, 6, 2)
     assert item["y_mask"].shape == (6, 6, 2)
     assert item["current_hourly"].shape == (6, 2)
+    assert item["x_meteo"].shape == (6, 5, 2)
+    assert item["meteo_mask"].shape == (6, 5, 2)
     assert item["x_hourly"].dtype == torch.float32
     assert item["x_mask"].dtype == torch.bool
     assert item["y_10min"].dtype == torch.float32
     assert item["y_mask"].dtype == torch.bool
+    assert item["x_meteo"].dtype == torch.float32
+    assert item["meteo_mask"].dtype == torch.bool
     assert torch.allclose(item["current_hourly"], item["x_hourly"][-1])
+    assert item["meteo_mask"].all()
     assert item["split"] == "train"
 
 
@@ -46,4 +51,3 @@ def test_dataset_loader_all_split_includes_gap_samples():
     splits = available_splits(DATASET_DIR)
 
     assert len(all_dataset) == sum(splits.values())
-

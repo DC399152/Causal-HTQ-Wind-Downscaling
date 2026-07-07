@@ -106,6 +106,9 @@ class WindDownscalingDataset:
     - ``y_10min``: [T_out, H, C]
     - ``y_mask``: [T_out, H, C]
     - ``current_hourly``: [H, C]
+    - optional ``x_meteo``: [L, P, C_m]
+    - optional ``meteo_mask``: [L, P, C_m]
+    - optional ``x_static``: [F_static]
     """
 
     def __init__(
@@ -192,6 +195,13 @@ class WindDownscalingDataset:
         y_10min = data["y_10min"][sample_index]
         y_mask = data["y_mask"][sample_index].astype(bool)
         current_hourly = data["current_hourly"][sample_index]
+        has_meteo = "x_meteo" in data and "meteo_mask" in data
+        if has_meteo:
+            x_meteo = data["x_meteo"][sample_index]
+            meteo_mask = data["meteo_mask"][sample_index].astype(bool)
+        has_static = "x_static" in data and data["x_static"].shape[-1] > 0
+        if has_static:
+            x_static = data["x_static"][sample_index].astype(np.float32)
 
         if self.normalize:
             if self.norm_stats is None:
@@ -203,6 +213,15 @@ class WindDownscalingDataset:
             x_hourly = _normalize_array(x_hourly, x_mask, x_mean, x_std)
             y_10min = _normalize_array(y_10min, y_mask, y_mean, y_std)
             current_hourly = _normalize_array(current_hourly, x_mask[-1], x_mean, x_std)
+            if has_meteo:
+                if "meteo_mean" not in self.norm_stats or "meteo_std" not in self.norm_stats:
+                    raise KeyError(
+                        "Dataset contains x_meteo but norm_stats.json is missing "
+                        "meteo_mean/meteo_std. Re-run scripts/compute_norm_stats.py."
+                    )
+                meteo_mean = np.asarray(self.norm_stats["meteo_mean"], dtype=np.float32)
+                meteo_std = np.asarray(self.norm_stats["meteo_std"], dtype=np.float32)
+                x_meteo = _normalize_array(x_meteo, meteo_mask, meteo_mean, meteo_std)
 
         item: dict[str, Any] = {
             "x_hourly": _as_tensor(x_hourly, dtype=require_torch().float32),
@@ -212,23 +231,42 @@ class WindDownscalingDataset:
             "current_hourly": _as_tensor(current_hourly, dtype=require_torch().float32),
             "sample_index": sample_index,
         }
+        if has_meteo:
+            item["x_meteo"] = _as_tensor(x_meteo, dtype=require_torch().float32)
+            item["meteo_mask"] = _as_tensor(meteo_mask, dtype=require_torch().bool)
+        if has_static:
+            item["x_static"] = _as_tensor(x_static, dtype=require_torch().float32)
 
         if self.return_metadata:
-            item.update(
-                {
-                    "station_id": str(data["station_id"][sample_index]),
-                    "target_time_start": str(data["target_time_start"][sample_index]),
-                    "target_times_10min": [
-                        str(v) for v in data["target_times_10min"][sample_index]
-                    ],
-                    "height_values": _as_tensor(
-                        data["height_values"][sample_index],
-                        dtype=require_torch().float32,
-                    ),
-                    "source_file": str(data["source_file"][sample_index]),
-                    "split": str(data["split"][sample_index]),
-                }
-            )
+            metadata = {
+                "station_id": str(data["station_id"][sample_index]),
+                "target_time_start": str(data["target_time_start"][sample_index]),
+                "target_times_10min": [
+                    str(v) for v in data["target_times_10min"][sample_index]
+                ],
+                "height_values": _as_tensor(
+                    data["height_values"][sample_index],
+                    dtype=require_torch().float32,
+                ),
+                "source_file": str(data["source_file"][sample_index]),
+                "split": str(data["split"][sample_index]),
+            }
+            if "station_lat" in data:
+                metadata["station_lat"] = float(data["station_lat"][sample_index])
+            if "station_lon" in data:
+                metadata["station_lon"] = float(data["station_lon"][sample_index])
+            if has_meteo and "meteo_pressure_levels" in data:
+                metadata["meteo_pressure_levels"] = _as_tensor(
+                    data["meteo_pressure_levels"],
+                    dtype=require_torch().float32,
+                )
+            if has_meteo and "meteo_channel_names" in data:
+                metadata["meteo_channel_names"] = [str(v) for v in data["meteo_channel_names"]]
+            if has_static and "static_feature_names" in data:
+                metadata["static_feature_names"] = [str(v) for v in data["static_feature_names"]]
+            if has_static and "dominant_lcz" in data:
+                metadata["dominant_lcz"] = float(data["dominant_lcz"][sample_index])
+            item.update(metadata)
 
         return item
 

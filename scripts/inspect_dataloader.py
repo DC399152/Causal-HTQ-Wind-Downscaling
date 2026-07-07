@@ -38,14 +38,18 @@ def main() -> None:
     print(f"normalize: {args.normalize}")
     print(f"dataset_len: {len(dataset)}")
     print("batch tensors:")
-    for key in ("x_hourly", "x_mask", "y_10min", "y_mask", "current_hourly"):
-        value = batch[key]
-        print(f"  {key}: shape={tuple(value.shape)} dtype={value.dtype}")
+    for key in ("x_hourly", "x_mask", "y_10min", "y_mask", "current_hourly", "x_meteo", "meteo_mask", "x_static"):
+        if key in batch:
+            value = batch[key]
+            print(f"  {key}: shape={tuple(value.shape)} dtype={value.dtype}")
 
     invalid_x_count = int((~batch["x_mask"]).sum().item())
     invalid_y_count = int((~batch["y_mask"]).sum().item())
     print(f"invalid_x_count: {invalid_x_count}")
     print(f"invalid_y_count: {invalid_y_count}")
+    if "meteo_mask" in batch:
+        invalid_meteo_count = int((~batch["meteo_mask"]).sum().item())
+        print(f"invalid_meteo_count: {invalid_meteo_count}")
     if args.normalize:
         x_invalid_nonzero = int((batch["x_hourly"][~batch["x_mask"]] != 0).sum().item())
         y_invalid_nonzero = int((batch["y_10min"][~batch["y_mask"]] != 0).sum().item())

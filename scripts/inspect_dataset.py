@@ -37,6 +37,39 @@ def main() -> None:
                 print("splits:")
                 for label, count in zip(labels, counts):
                     print(f"  {label}: {count}")
+            if "x_meteo" in data:
+                print("meteo:")
+                print(f"  x_meteo shape: {data['x_meteo'].shape}  # [N, L, P, C_m]")
+                print(f"  meteo_mask shape: {data['meteo_mask'].shape}")
+                print(f"  meteo valid ratio: {float(data['meteo_mask'].mean()):.6f}")
+                if "meteo_pressure_levels" in data:
+                    print(f"  pressure_levels_hpa: {data['meteo_pressure_levels'].tolist()}")
+                if "meteo_channel_names" in data:
+                    print(f"  channel_names: {[str(v) for v in data['meteo_channel_names']]}")
+            if "x_static" in data and data["x_static"].shape[-1] > 0:
+                x_static = data["x_static"]
+                print("static:")
+                print(f"  x_static shape: {x_static.shape}  # [N, F_static]")
+                if "static_feature_names" in data:
+                    names = [str(v) for v in data["static_feature_names"]]
+                    print(f"  static_feature_names: {names}")
+                print(
+                    "  x_static stats: "
+                    f"min={float(np.nanmin(x_static)):.6f} "
+                    f"max={float(np.nanmax(x_static)):.6f} "
+                    f"mean={float(np.nanmean(x_static)):.6f}"
+                )
+                if "static_feature_names" in data:
+                    names = [str(v) for v in data["static_feature_names"]]
+                    nan_counts = np.isnan(x_static).sum(axis=0)
+                    print("  static NaN counts:")
+                    for name, count in zip(names, nan_counts):
+                        print(f"    {name}: {int(count)}")
+                if "dominant_lcz" in data:
+                    labels, counts = np.unique(data["dominant_lcz"], return_counts=True)
+                    print("  dominant_lcz distribution:")
+                    for label, count in zip(labels, counts):
+                        print(f"    {label}: {int(count)}")
 
     if metadata_path.exists():
         print("metadata:")
@@ -48,6 +81,10 @@ def main() -> None:
             print(f"  split_policy: {metadata.get('split_policy')}")
         if metadata.get("split_counts"):
             print(f"  split_counts: {metadata.get('split_counts')}")
+        if metadata.get("meteo"):
+            print(f"  meteo: {metadata.get('meteo')}")
+        if metadata.get("static_features"):
+            print(f"  static_features: {metadata.get('static_features')}")
         warnings = metadata.get("warnings", [])
         if warnings:
             max_warnings = 20

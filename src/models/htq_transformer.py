@@ -7,7 +7,10 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from src.models.query_builder import TargetQueryBuilder
+from src.models.meteo_encoder import MeteoEncoderConfig, MeteoPressureLevelEncoder
+from src.models.multimodal_fusion import GatedCrossAttentionFusion
+from src.models.query_builder import ContextConditionedQueryBuilder, FixedTargetQueryBuilder
+from src.models.static_encoder import StaticEncoderConfig, StaticFeatureEncoder
 from src.models.tokenizer import HeightTimeTokenizer
 
 
@@ -26,6 +29,25 @@ class HTQConfig:
     height_levels: int = 6
     input_channels: int = 2
     output_channels: int = 2
+    enforce_zero_mean_residual: bool = False
+    use_meteo: bool = False
+    use_static: bool = False
+    meteo_context_hours: int = 6
+    meteo_pressure_levels_hpa: tuple[int, ...] = (1000, 975, 950, 925, 900)
+    num_meteo_channels: int = 2
+    meteo_use_delta: bool = True
+    meteo_use_mask_channels: bool = False
+    fusion_nhead: int = 4
+    fusion_dropout: float = 0.1
+    fusion_gate_init_bias: float = -2.0
+    static_input_dim: int = 17
+    static_n_tokens: int = 1
+    static_hidden_dim: int = 128
+    static_dropout: float = 0.1
+    query_builder_type: str = "context_conditioned"
+    query_use_context_projection: bool = True
+    query_use_context_layernorm: bool = True
+    query_use_trend_context: bool = False
 
 
 class CausalHTQTransformer(nn.Module):
@@ -64,11 +86,65 @@ class CausalHTQTransformer(nn.Module):
             num_layers=self.config.num_encoder_layers,
         )
 
-        self.query_builder = TargetQueryBuilder(
-            d_model=self.config.d_model,
-            target_steps=self.config.target_steps,
-            height_levels=self.config.height_levels,
-        )
+        if self.config.query_builder_type == "fixed":
+            self.query_builder = FixedTargetQueryBuilder(
+                d_model=self.config.d_model,
+                target_steps=self.config.target_steps,
+                height_levels=self.config.height_levels,
+            )
+        elif self.config.query_builder_type == "context_conditioned":
+            self.query_builder = ContextConditionedQueryBuilder(
+                d_model=self.config.d_model,
+                target_steps=self.config.target_steps,
+                context_hours=self.config.context_hours,
+                height_levels=self.config.height_levels,
+                use_context_projection=self.config.query_use_context_projection,
+                use_context_layernorm=self.config.query_use_context_layernorm,
+                use_trend_context=self.config.query_use_trend_context,
+            )
+        else:
+            raise ValueError(
+                "query_builder_type must be 'fixed' or 'context_conditioned', "
+                f"got {self.config.query_builder_type!r}"
+            )
+
+        if self.config.use_meteo:
+            self.meteo_encoder = MeteoPressureLevelEncoder(
+                MeteoEncoderConfig(
+                    d_model=self.config.d_model,
+                    context_hours=self.config.meteo_context_hours,
+                    num_pressure_levels=len(self.config.meteo_pressure_levels_hpa),
+                    num_meteo_channels=self.config.num_meteo_channels,
+                    pressure_levels_hpa=self.config.meteo_pressure_levels_hpa,
+                    use_delta=self.config.meteo_use_delta,
+                    use_mask_channels=self.config.meteo_use_mask_channels,
+                )
+            )
+        else:
+            self.meteo_encoder = None
+
+        if self.config.use_static:
+            self.static_encoder = StaticFeatureEncoder(
+                StaticEncoderConfig(
+                    input_dim=self.config.static_input_dim,
+                    d_model=self.config.d_model,
+                    hidden_dim=self.config.static_hidden_dim,
+                    dropout=self.config.static_dropout,
+                    n_static_tokens=self.config.static_n_tokens,
+                )
+            )
+        else:
+            self.static_encoder = None
+
+        if self.config.use_meteo or self.config.use_static:
+            self.fusion = GatedCrossAttentionFusion(
+                d_model=self.config.d_model,
+                nhead=self.config.fusion_nhead,
+                dropout=self.config.fusion_dropout,
+                gate_init_bias=self.config.fusion_gate_init_bias,
+            )
+        else:
+            self.fusion = None
 
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=self.config.d_model,
@@ -83,7 +159,14 @@ class CausalHTQTransformer(nn.Module):
         )
         self.residual_head = nn.Linear(self.config.d_model, self.config.output_channels)
 
-    def forward(self, x_hourly: torch.Tensor, x_mask: torch.Tensor) -> dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x_hourly: torch.Tensor,
+        x_mask: torch.Tensor,
+        x_meteo: torch.Tensor | None = None,
+        meteo_mask: torch.Tensor | None = None,
+        x_static: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor | dict[str, object] | None]:
         """Run minimal HTQ forward.
 
         Returns
@@ -92,6 +175,7 @@ class CausalHTQTransformer(nn.Module):
             pred: [B, T_out=6, H=6, 2]
             residual: [B, T_out=6, H=6, 2].
             encoder_memory: [B, L*H=36, d_model=64]
+            fusion_info: gate diagnostics when multimodal fusion is used, else None.
         """
 
         self._validate_inputs(x_hourly, x_mask)
@@ -102,7 +186,47 @@ class CausalHTQTransformer(nn.Module):
             raise RuntimeError("HTQ tokenizer must be configured with d_model")
 
         # encoder_input: [B, L*H, d_model].
-        encoder_input = tokenized.token_embeddings
+        wind_tokens = tokenized.token_embeddings
+        fusion_info = None
+        aux_tokens_list: list[torch.Tensor] = []
+        aux_padding_masks: list[torch.Tensor] = []
+        if self.config.use_meteo and x_meteo is not None:
+            if self.meteo_encoder is None:
+                raise RuntimeError("Meteo encoder is not initialized")
+            meteo_tokens = self.meteo_encoder(x_meteo, meteo_mask)
+            aux_tokens_list.append(meteo_tokens)
+            if meteo_mask is not None:
+                # meteo_token_valid: [B, L, P], True if any meteo channel is valid.
+                meteo_token_valid = meteo_mask.any(dim=-1)
+                aux_padding_masks.append(~meteo_token_valid.reshape(
+                    meteo_token_valid.shape[0],
+                    meteo_token_valid.shape[1] * meteo_token_valid.shape[2],
+                ))
+
+        if self.config.use_static and x_static is not None:
+            if self.static_encoder is None:
+                raise RuntimeError("Static encoder is not initialized")
+            static_tokens = self.static_encoder(x_static)
+            aux_tokens_list.append(static_tokens)
+            aux_padding_masks.append(
+                torch.zeros(
+                    static_tokens.shape[:2],
+                    dtype=torch.bool,
+                    device=static_tokens.device,
+                )
+            )
+
+        if aux_tokens_list:
+            if self.fusion is None:
+                raise RuntimeError("Multimodal fusion module is not initialized")
+            aux_tokens = torch.cat(aux_tokens_list, dim=1)
+            aux_key_padding_mask = None
+            if aux_padding_masks and len(aux_padding_masks) == len(aux_tokens_list):
+                aux_key_padding_mask = torch.cat(aux_padding_masks, dim=1)
+            encoder_input, fusion_info = self.fusion(wind_tokens, aux_tokens, aux_key_padding_mask)
+        else:
+            encoder_input = wind_tokens
+
         token_valid = tokenized.token_valid.reshape(batch_size, context_hours * height_levels)
         src_key_padding_mask = ~token_valid
         encoder_memory = self.encoder(
@@ -112,9 +236,8 @@ class CausalHTQTransformer(nn.Module):
 
         # target_queries: [B, T_out*H, d_model].
         target_queries = self.query_builder(
-            batch_size=batch_size,
+            encoder_memory,
             height_levels=height_levels,
-            device=x_hourly.device,
         )
         decoded = self.decoder(
             tgt=target_queries,
@@ -130,7 +253,6 @@ class CausalHTQTransformer(nn.Module):
             height_levels,
             self.config.output_channels,
         )
-
         # pred: current hourly profile plus learned intra-hour residual.
         current_hourly = x_hourly[:, -1]
         pred = current_hourly.unsqueeze(1) + residual
@@ -138,6 +260,7 @@ class CausalHTQTransformer(nn.Module):
             "pred": pred,
             "residual": residual,
             "encoder_memory": encoder_memory,
+            "fusion_info": fusion_info,
         }
 
     def _validate_inputs(self, x_hourly: torch.Tensor, x_mask: torch.Tensor) -> None:

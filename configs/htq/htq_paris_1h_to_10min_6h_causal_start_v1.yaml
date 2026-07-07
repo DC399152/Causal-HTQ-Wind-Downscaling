@@ -22,6 +22,13 @@ model:
   enforce_zero_mean_residual: false
   residual_reference: current_hourly
 
+query_builder:
+  type: context_conditioned
+  context_source: current_hour_height
+  use_context_projection: true
+  use_context_layernorm: true
+  use_trend_context: false
+
 training:
   batch_size: 32
   max_epochs: null

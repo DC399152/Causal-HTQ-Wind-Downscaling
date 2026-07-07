@@ -44,6 +44,31 @@ class SplitConfig:
 
 
 @dataclass(frozen=True)
+class MeteoConfig:
+    """Optional ERA5 meteorological auxiliary input settings."""
+
+    enabled: bool
+    source: str
+    pressure_dir: Path | None
+    interpolation: str
+    out_of_bounds: str
+    variables: dict[str, Any]
+    channel_names: tuple[str, ...]
+    expected_pressure_levels_hpa: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class StaticFeatureConfig:
+    """Optional station-level static feature settings."""
+
+    use_lcz: bool
+    lcz_feature_csv: Path | None
+    feature_columns: tuple[str, ...]
+    station_id_column: str
+    dominant_lcz_column: str
+
+
+@dataclass(frozen=True)
 class PreprocessingConfig:
     """Normalized preprocessing YAML config."""
 
@@ -65,6 +90,8 @@ class PreprocessingConfig:
     hourly_channels: tuple[str, ...]
     target_channels: tuple[str, ...]
     height: HeightSelectionConfig
+    meteo: MeteoConfig
+    static_features: StaticFeatureConfig
     quality: QualityControlConfig
     splits: SplitConfig
     output_format: str
@@ -99,6 +126,8 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
     qc = cfg.get("quality_control", {})
     split = cfg.get("splits", {})
     output = cfg.get("output", {})
+    meteo_cfg = cfg.get("meteo", {})
+    static_cfg = cfg.get("static_features", {})
 
     hourly_channels = _as_tuple(
         variables.get("hourly_channels"),
@@ -135,6 +164,25 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             ),
             height_reference=str(height_cfg.get("height_reference", "agl_rounded_station_altitude")),
             max_height_diff=float(height_cfg.get("max_height_diff", 0.1)),
+        ),
+        meteo=MeteoConfig(
+            enabled=bool(meteo_cfg.get("enabled", False)),
+            source=str(meteo_cfg.get("source", "era5")),
+            pressure_dir=Path(meteo_cfg["pressure_dir"]) if meteo_cfg.get("pressure_dir") else None,
+            interpolation=str(meteo_cfg.get("interpolation", "bilinear")),
+            out_of_bounds=str(meteo_cfg.get("out_of_bounds", "nearest")),
+            variables=dict(meteo_cfg.get("variables", {})),
+            channel_names=tuple(str(v) for v in meteo_cfg.get("channel_names", ("temperature", "humidity"))),
+            expected_pressure_levels_hpa=tuple(
+                float(v) for v in meteo_cfg.get("expected_pressure_levels_hpa", ())
+            ),
+        ),
+        static_features=StaticFeatureConfig(
+            use_lcz=bool(static_cfg.get("use_lcz", False)),
+            lcz_feature_csv=Path(static_cfg["lcz_feature_csv"]) if static_cfg.get("lcz_feature_csv") else None,
+            feature_columns=tuple(str(v) for v in static_cfg.get("feature_columns", ())),
+            station_id_column=str(static_cfg.get("station_id_column", "station_id")),
+            dominant_lcz_column=str(static_cfg.get("dominant_lcz_column", "dominant_lcz_500m")),
         ),
         quality=QualityControlConfig(
             missing_value=float(qc.get("missing_value", -999.0)),
@@ -179,6 +227,24 @@ def validate_config(config: PreprocessingConfig) -> list[str]:
         warnings.append("QC flag use is enabled; verify flag semantics with inspect_raw_nc.py")
     if config.splits.split_gap_hours < 0:
         raise ValueError("split_gap_hours must be non-negative")
+    if config.meteo.enabled:
+        if config.meteo.source != "era5":
+            raise ValueError("Only meteo.source=era5 is supported")
+        if config.meteo.pressure_dir is None:
+            raise ValueError("meteo.pressure_dir is required when meteo.enabled=true")
+        if config.meteo.interpolation not in {"bilinear", "nearest"}:
+            raise ValueError("meteo.interpolation must be bilinear or nearest")
+        if config.meteo.out_of_bounds not in {"nearest", "error"}:
+            raise ValueError("meteo.out_of_bounds must be nearest or error")
+        required = {"time", "pressure_level", "latitude", "longitude", "temperature", "humidity"}
+        missing = sorted(required - set(config.meteo.variables))
+        if missing:
+            raise ValueError(f"meteo.variables is missing required keys: {missing}")
+    if config.static_features.use_lcz:
+        if config.static_features.lcz_feature_csv is None:
+            raise ValueError("static_features.lcz_feature_csv is required when use_lcz=true")
+        if not config.static_features.feature_columns:
+            raise ValueError("static_features.feature_columns is required when use_lcz=true")
     return warnings
 
 

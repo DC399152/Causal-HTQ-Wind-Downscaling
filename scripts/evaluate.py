@@ -35,6 +35,10 @@ def model_config_from_checkpoint(checkpoint: dict[str, Any]) -> HTQConfig:
     config = checkpoint.get("model_config")
     if not config:
         raise KeyError("Checkpoint is missing model_config")
+    config = dict(config)
+    # Checkpoints created before context-conditioned queries used fixed target
+    # queries and do not contain the extra context projection parameters.
+    config.setdefault("query_builder_type", "fixed")
     return HTQConfig(**config)
 
 

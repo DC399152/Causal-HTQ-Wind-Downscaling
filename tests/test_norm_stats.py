@@ -22,6 +22,10 @@ def test_compute_norm_stats_train_only_shapes_and_counts(tmp_path):
     assert all(v > 0 for v in stats["y_std"])
     assert all(v > 0 for v in stats["x_count"])
     assert all(v > 0 for v in stats["y_count"])
+    assert len(stats["meteo_mean"]) == 2
+    assert len(stats["meteo_std"]) == 2
+    assert all(v > 0 for v in stats["meteo_std"])
+    assert all(v > 0 for v in stats["meteo_count"])
 
     output = tmp_path / "norm_stats.json"
     save_norm_stats(stats, output)
@@ -78,4 +82,6 @@ def test_dataset_normalize_uses_stats_when_torch_available(tmp_path):
     assert item["y_mask"].dtype == torch.bool
     assert torch.all(item["x_hourly"][~item["x_mask"]] == 0)
     assert torch.all(item["y_10min"][~item["y_mask"]] == 0)
-
+    assert item["x_meteo"].shape == (6, 5, 2)
+    assert item["meteo_mask"].dtype == torch.bool
+    assert torch.all(item["x_meteo"][~item["meteo_mask"]] == 0)

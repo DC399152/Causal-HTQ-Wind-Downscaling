@@ -64,9 +64,18 @@ def main() -> None:
     item = dataset[local_index]
     x_hourly = item["x_hourly"].unsqueeze(0).to(device)
     x_mask = item["x_mask"].unsqueeze(0).to(device)
+    x_meteo = item["x_meteo"].unsqueeze(0).to(device) if "x_meteo" in item else None
+    meteo_mask = item["meteo_mask"].unsqueeze(0).to(device) if "meteo_mask" in item else None
+    x_static = item["x_static"].unsqueeze(0).to(device) if "x_static" in item else None
 
     with torch.no_grad():
-        out = model(x_hourly, x_mask)
+        out = model(
+            x_hourly,
+            x_mask,
+            x_meteo=x_meteo,
+            meteo_mask=meteo_mask,
+            x_static=x_static,
+        )
         pred_ms = y_denormalize(out["pred"], norm_stats)[0].cpu()
         target_ms = y_denormalize(item["y_10min"].unsqueeze(0).to(device), norm_stats)[0].cpu()
         current_ms = x_denormalize(item["current_hourly"].unsqueeze(0).to(device), norm_stats)[0].cpu()

@@ -18,6 +18,7 @@ from src.data.alignment import (
     times_to_strings,
     validate_sample_alignment,
 )
+from src.data.era5_reader import Era5StationData, StationLocation, load_era5_for_stations
 from src.data.masks import fill_invalid, valid_numeric_mask, valid_ratio
 from src.data.preprocessing import (
     PreprocessingConfig,
@@ -26,6 +27,7 @@ from src.data.preprocessing import (
     validate_config,
 )
 from src.data.raw_reader import RawFilePair, dataset_time_values, open_dataset, pair_nc_files, require_variables
+from src.data.static_features import StationStaticFeatures, load_station_static_features
 
 
 @dataclass(frozen=True)
@@ -49,7 +51,13 @@ class SampleAccumulator:
     y_10min: list[np.ndarray] = field(default_factory=list)
     y_mask: list[np.ndarray] = field(default_factory=list)
     current_hourly: list[np.ndarray] = field(default_factory=list)
+    x_meteo: list[np.ndarray] = field(default_factory=list)
+    meteo_mask: list[np.ndarray] = field(default_factory=list)
+    x_static: list[np.ndarray] = field(default_factory=list)
+    dominant_lcz: list[float] = field(default_factory=list)
     station_id: list[str] = field(default_factory=list)
+    station_lat: list[float] = field(default_factory=list)
+    station_lon: list[float] = field(default_factory=list)
     target_time_start: list[str] = field(default_factory=list)
     target_times_10min: list[list[str]] = field(default_factory=list)
     height_values: list[np.ndarray] = field(default_factory=list)
@@ -65,6 +73,8 @@ class StationSeries:
 
     station_id: str
     height_values: np.ndarray
+    latitude: float | None = None
+    longitude: float | None = None
     hourly: dict[np.datetime64, np.ndarray] = field(default_factory=dict)
     target: dict[np.datetime64, np.ndarray] = field(default_factory=dict)
     hourly_source: dict[np.datetime64, str] = field(default_factory=dict)
@@ -176,11 +186,17 @@ def _append_sample(
     y: np.ndarray,
     y_mask: np.ndarray,
     station_id: str,
+    station_lat: float | None,
+    station_lon: float | None,
     hour_start,
     target_times,
     height_values: np.ndarray,
     source_file: str,
     config: PreprocessingConfig,
+    x_meteo: np.ndarray | None = None,
+    meteo_mask: np.ndarray | None = None,
+    x_static: np.ndarray | None = None,
+    dominant_lcz: float | None = None,
 ) -> None:
     """Append one sample with semantic shapes.
 
@@ -194,7 +210,15 @@ def _append_sample(
     acc.y_10min.append(fill_invalid(y, y_mask, missing_value))
     acc.y_mask.append(y_mask.astype(bool))
     acc.current_hourly.append(fill_invalid(x[-1], x_mask[-1], missing_value))
+    if x_meteo is not None and meteo_mask is not None:
+        acc.x_meteo.append(fill_invalid(x_meteo, meteo_mask, missing_value))
+        acc.meteo_mask.append(meteo_mask.astype(bool))
+    if x_static is not None:
+        acc.x_static.append(np.asarray(x_static, dtype=np.float32))
+        acc.dominant_lcz.append(float(dominant_lcz) if dominant_lcz is not None else np.nan)
     acc.station_id.append(station_id)
+    acc.station_lat.append(float(station_lat) if station_lat is not None else np.nan)
+    acc.station_lon.append(float(station_lon) if station_lon is not None else np.nan)
     acc.target_time_start.append(str(time_key(hour_start)))
     acc.target_times_10min.append(times_to_strings(target_times))
     acc.height_values.append(np.asarray(height_values, dtype=np.float32))
@@ -281,6 +305,8 @@ def _build_samples_from_pair(
                 y,
                 y_mask,
                 station_id,
+                None,
+                None,
                 hour_start,
                 wanted_target_times,
                 actual_agl,
@@ -330,10 +356,14 @@ def _load_pair_into_station_series(
 
     station_ids = _station_ids(hourly_ds, config, station_count)
     station_alt_name = config.variables.get("station_altitude")
+    station_lat_name = config.variables.get("station_lat")
+    station_lon_name = config.variables.get("station_lon")
     source = f"{pair.hourly_path.name}|{pair.target_path.name}"
 
     for station_idx, station_id in enumerate(station_ids):
         station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
+        station_lat = station_value(hourly_ds, station_lat_name, station_idx, default=np.nan)
+        station_lon = station_value(hourly_ds, station_lon_name, station_idx, default=np.nan)
         try:
             heights_raw = _height_values_for_station(hourly_ds, config, station_idx)
             height_meta = select_height_indices(heights_raw, station_altitude, config.height)
@@ -347,7 +377,12 @@ def _load_pair_into_station_series(
         station_target = np.take(target_values[station_idx], hidx, axis=1)
 
         if station_id not in series_by_station:
-            series_by_station[station_id] = StationSeries(station_id, actual_agl)
+            series_by_station[station_id] = StationSeries(
+                station_id,
+                actual_agl,
+                float(station_lat) if np.isfinite(station_lat) else None,
+                float(station_lon) if np.isfinite(station_lon) else None,
+            )
         series = series_by_station[station_id]
         if not np.allclose(series.height_values, actual_agl):
             warnings.append(
@@ -378,6 +413,8 @@ def _build_samples_from_global_series(
     series_by_station: dict[str, StationSeries],
     config: PreprocessingConfig,
     acc: SampleAccumulator,
+    era5_data: Era5StationData | None = None,
+    static_data: StationStaticFeatures | None = None,
 ) -> list[str]:
     """Build sliding-window samples from globally merged station series."""
 
@@ -407,6 +444,21 @@ def _build_samples_from_global_series(
             y = np.stack([series.target[t] for t in target_times]).astype(np.float32)
             x_mask = valid_numeric_mask(x, config.quality.missing_value)
             y_mask = valid_numeric_mask(y, config.quality.missing_value)
+            x_meteo = None
+            meteo_mask = None
+            if era5_data is not None:
+                x_meteo, meteo_mask = era5_data.sample_context(
+                    station_id,
+                    context_times,
+                    config.quality.missing_value,
+                )
+            x_static = None
+            dominant_lcz = None
+            if static_data is not None:
+                x_static = static_data.features_for_station(station_id)
+                dominant_lcz = static_data.dominant_lcz_for_station(station_id)
+                if not np.all(np.isfinite(x_static)):
+                    warnings.append(f"Static features for station {station_id} contain NaN/Inf values.")
 
             if not _passes_sample_filters(x_mask, y_mask, config):
                 continue
@@ -424,11 +476,17 @@ def _build_samples_from_global_series(
                 y,
                 y_mask,
                 station_id,
+                series.latitude,
+                series.longitude,
                 hour_start,
                 target_times,
                 series.height_values,
                 ";".join(source_files),
                 config,
+                x_meteo=x_meteo,
+                meteo_mask=meteo_mask,
+                x_static=x_static,
+                dominant_lcz=dominant_lcz,
             )
 
     if not series_by_station:
@@ -458,7 +516,16 @@ def _empty_arrays(config: PreprocessingConfig) -> dict[str, np.ndarray]:
         "y_10min": np.empty((0, t_out, h, c), dtype=np.float32),
         "y_mask": np.empty((0, t_out, h, c), dtype=bool),
         "current_hourly": np.empty((0, h, c), dtype=np.float32),
+        "x_meteo": np.empty((0, l, 0, 0), dtype=np.float32),
+        "meteo_mask": np.empty((0, l, 0, 0), dtype=bool),
+        "meteo_pressure_levels": np.empty((0,), dtype=np.float32),
+        "meteo_channel_names": np.empty((0,), dtype=object),
+        "x_static": np.empty((0, 0), dtype=np.float32),
+        "static_feature_names": np.empty((0,), dtype=object),
+        "dominant_lcz": np.empty((0,), dtype=np.float32),
         "station_id": np.empty((0,), dtype=object),
+        "station_lat": np.empty((0,), dtype=np.float32),
+        "station_lon": np.empty((0,), dtype=np.float32),
         "target_time_start": np.empty((0,), dtype=object),
         "target_times_10min": np.empty((0, t_out), dtype=object),
         "height_values": np.empty((0, h), dtype=np.float32),
@@ -520,7 +587,7 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
     if len(acc) == 0:
         return _empty_arrays(config)
     split = _split_labels(acc.target_time_start, config)
-    return {
+    arrays = {
         # x_hourly: [N, L=6, H=6, C=2]
         "x_hourly": np.stack(acc.x_hourly).astype(np.float32),
         "x_mask": np.stack(acc.x_mask).astype(bool),
@@ -529,12 +596,22 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
         "y_mask": np.stack(acc.y_mask).astype(bool),
         "current_hourly": np.stack(acc.current_hourly).astype(np.float32),
         "station_id": np.asarray(acc.station_id, dtype=object),
+        "station_lat": np.asarray(acc.station_lat, dtype=np.float32),
+        "station_lon": np.asarray(acc.station_lon, dtype=np.float32),
         "target_time_start": np.asarray(acc.target_time_start, dtype=object),
         "target_times_10min": np.asarray(acc.target_times_10min, dtype=object),
         "height_values": np.stack(acc.height_values).astype(np.float32),
         "source_file": np.asarray(acc.source_file, dtype=object),
         "split": split,
     }
+    if acc.x_meteo:
+        arrays["x_meteo"] = np.stack(acc.x_meteo).astype(np.float32)
+        arrays["meteo_mask"] = np.stack(acc.meteo_mask).astype(bool)
+    if acc.x_static:
+        arrays["x_static"] = np.stack(acc.x_static).astype(np.float32)
+        arrays["static_feature_names"] = np.asarray(config.static_features.feature_columns, dtype=object)
+        arrays["dominant_lcz"] = np.asarray(acc.dominant_lcz, dtype=np.float32)
+    return arrays
 
 
 def _write_dataset(
@@ -574,6 +651,25 @@ def _write_dataset(
         },
         "shapes": {name: list(value.shape) for name, value in arrays.items()},
         "channel_names": list(config.hourly_channels),
+        "meteo": {
+            "enabled": bool(config.meteo.enabled),
+            "source": config.meteo.source,
+            "pressure_dir": str(config.meteo.pressure_dir) if config.meteo.pressure_dir else None,
+            "interpolation": config.meteo.interpolation,
+            "out_of_bounds": config.meteo.out_of_bounds,
+            "channel_names": list(config.meteo.channel_names),
+            "pressure_levels_hpa": arrays.get("meteo_pressure_levels", np.asarray([])).tolist(),
+        },
+        "static_features": {
+            "use_lcz": bool(config.static_features.use_lcz),
+            "lcz_feature_csv": (
+                str(config.static_features.lcz_feature_csv)
+                if config.static_features.lcz_feature_csv is not None
+                else None
+            ),
+            "feature_columns": list(config.static_features.feature_columns),
+            "has_x_static": "x_static" in arrays and arrays["x_static"].shape[-1] > 0,
+        },
         "selected_heights_agl": list(config.height.selected_heights_agl),
         "missing_value": config.quality.missing_value,
         "raw_pairs": [
@@ -605,6 +701,8 @@ def build_dataset(config: PreprocessingConfig, dry_run: bool = False) -> BuildSu
     pairs = pair_nc_files(config.raw_3600s_dir, config.raw_600s_dir)
     acc = SampleAccumulator()
     series_by_station: dict[str, StationSeries] = {}
+    era5_data: Era5StationData | None = None
+    static_data: StationStaticFeatures | None = None
 
     if not pairs:
         warnings.append("No paired *_3600s.nc / *_600s.nc files found; writing empty dataset.")
@@ -614,9 +712,50 @@ def build_dataset(config: PreprocessingConfig, dry_run: bool = False) -> BuildSu
                 warnings.extend(_load_pair_into_station_series(pair, config, series_by_station))
             except Exception as exc:
                 warnings.append(f"Skipping raw pair {pair.prefix}: {exc}")
-        warnings.extend(_build_samples_from_global_series(series_by_station, config, acc))
+        if config.meteo.enabled:
+            station_locations = {
+                station_id: StationLocation(station_id, series.latitude, series.longitude)
+                for station_id, series in series_by_station.items()
+                if series.latitude is not None and series.longitude is not None
+            }
+            missing_locations = sorted(set(series_by_station) - set(station_locations))
+            if missing_locations:
+                warnings.append(
+                    "ERA5 enabled but station lat/lon missing for: "
+                    + ", ".join(missing_locations)
+                )
+            if station_locations:
+                era5_data = load_era5_for_stations(config.meteo, station_locations)
+                for station_id, method in sorted(era5_data.interpolation_method_by_station.items()):
+                    if method == "nearest":
+                        warnings.append(f"ERA5 nearest interpolation used for station {station_id}.")
+        if config.static_features.use_lcz:
+            static_data = load_station_static_features(
+                config.static_features.lcz_feature_csv,
+                config.static_features.feature_columns,
+                station_id_column=config.static_features.station_id_column,
+                dominant_lcz_column=config.static_features.dominant_lcz_column,
+            )
+            missing_static = sorted(set(series_by_station) - set(static_data.values_by_station))
+            if missing_static:
+                raise KeyError(
+                    "LCZ static features missing for station_id(s): "
+                    + ", ".join(missing_static)
+                )
+        warnings.extend(
+            _build_samples_from_global_series(
+                series_by_station,
+                config,
+                acc,
+                era5_data,
+                static_data,
+            )
+        )
 
     arrays = _arrays_from_accumulator(acc, config)
+    if era5_data is not None:
+        arrays["meteo_pressure_levels"] = era5_data.pressure_levels.astype(np.float32)
+        arrays["meteo_channel_names"] = np.asarray(era5_data.channel_names, dtype=object)
     if not dry_run:
         _write_dataset(arrays, pairs, config, warnings)
 

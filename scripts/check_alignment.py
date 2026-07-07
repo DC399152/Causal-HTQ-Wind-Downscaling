@@ -29,6 +29,11 @@ def _expected_target_times(start: str) -> list[str]:
     return [str(base + np.timedelta64(offset, "m")) for offset in TARGET_OFFSETS_MINUTES]
 
 
+def _expected_context_times(start: str, context_hours: int = 6) -> list[str]:
+    base = np.datetime64(start, "m")
+    return [str(base - np.timedelta64(offset, "h")) for offset in range(context_hours - 1, -1, -1)]
+
+
 def _masked_target_mean(y: np.ndarray, mask: np.ndarray, missing_value: float) -> np.ndarray:
     """Mean over target time using valid mask.
 
@@ -76,6 +81,14 @@ def check_alignment(dataset_dir: str | Path, num_examples: int = 5, seed: int = 
     print(f"x_hourly shape: {x.shape}  # [N, L, H, C]")
     print(f"y_10min shape: {y.shape}  # [N, T_out, H, C]")
     print(f"current_hourly shape: {current.shape}  # [N, H, C]")
+    has_meteo = "x_meteo" in ds and "meteo_mask" in ds
+    if has_meteo:
+        print(f"x_meteo shape: {ds['x_meteo'].shape}  # [N, L, P, C_m]")
+        print(f"meteo_mask shape: {ds['meteo_mask'].shape}")
+        if "meteo_pressure_levels" in ds:
+            print(f"meteo pressure levels: {ds['meteo_pressure_levels'].tolist()}")
+        if "meteo_channel_names" in ds:
+            print(f"meteo channel names: {[str(v) for v in ds['meteo_channel_names']]}")
 
     if n == 0:
         print("WARNING: dataset contains no samples; alignment checks are structurally complete only.")
@@ -107,6 +120,8 @@ def check_alignment(dataset_dir: str | Path, num_examples: int = 5, seed: int = 
     print(f"x valid ratio: {float(x_mask.mean()):.6f}")
     print(f"y valid ratio: {float(y_mask.mean()):.6f}")
     print(f"current-hour x valid ratio: {float(x_mask[:, -1].mean()):.6f}")
+    if has_meteo:
+        print(f"meteo valid ratio: {float(ds['meteo_mask'].mean()):.6f}")
 
     if valid_diff.size == 0:
         print("WARNING: no valid positions for masked mean(y_10min) vs current_hourly comparison.")
@@ -130,9 +145,18 @@ def check_alignment(dataset_dir: str | Path, num_examples: int = 5, seed: int = 
     for idx in sample_indices:
         print(f"  sample_index: {idx}")
         print(f"    station_id: {ds['station_id'][idx]}")
+        if "station_lat" in ds and "station_lon" in ds:
+            print(f"    station lat/lon: {float(ds['station_lat'][idx])}, {float(ds['station_lon'][idx])}")
         print(f"    target_time_start: {ds['target_time_start'][idx]}")
+        context_times = _expected_context_times(str(ds["target_time_start"][idx]), context_hours=x.shape[1])
+        print(f"    wind_context_times: {context_times}")
+        if has_meteo:
+            print(f"    meteo_context_times: {context_times}")
+            print(f"    x_meteo shape: {ds['x_meteo'][idx].shape}")
         print(f"    target_times_10min: {[str(t) for t in ds['target_times_10min'][idx]]}")
         print(f"    height_values: {ds['height_values'][idx].tolist()}")
+        if has_meteo and "meteo_pressure_levels" in ds:
+            print(f"    meteo_pressure_levels: {ds['meteo_pressure_levels'].tolist()}")
         print(f"    split: {ds['split'][idx]}")
         print(f"    source_file: {ds['source_file'][idx]}")
 
@@ -152,4 +176,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

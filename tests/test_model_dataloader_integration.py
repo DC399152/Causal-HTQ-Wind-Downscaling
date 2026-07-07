@@ -34,5 +34,6 @@ def test_causal_htq_transformer_accepts_real_dataloader_batch():
     assert out["pred"].shape == (4, 6, 6, 2)
     assert out["residual"].shape == (4, 6, 6, 2)
     assert out["encoder_memory"].shape == (4, 36, 64)
+    assert out["fusion_info"] is None
     expected = batch["current_hourly"].unsqueeze(1) + out["residual"]
     assert torch.allclose(out["pred"], expected, atol=1e-6)

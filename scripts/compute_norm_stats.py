@@ -38,6 +38,10 @@ def main() -> None:
     print(f"x_std: {stats['x_std']}")
     print(f"y_mean: {stats['y_mean']}")
     print(f"y_std: {stats['y_std']}")
+    if "meteo_mean" in stats:
+        print(f"meteo_channel_names: {stats['meteo_channel_names']}")
+        print(f"meteo_mean: {stats['meteo_mean']}")
+        print(f"meteo_std: {stats['meteo_std']}")
 
 
 if __name__ == "__main__":

@@ -63,13 +63,21 @@ def compute_norm_stats(
         x_mask = data["x_mask"][indices]
         y = data["y_10min"][indices]
         y_mask = data["y_mask"][indices]
+        has_meteo = "x_meteo" in data and "meteo_mask" in data
+        if has_meteo:
+            x_meteo = data["x_meteo"][indices]
+            meteo_mask = data["meteo_mask"][indices]
+            meteo_channel_names = (
+                [str(v) for v in data["meteo_channel_names"]]
+                if "meteo_channel_names" in data
+                else []
+            )
 
     x_stats = _masked_channel_stats(x, x_mask, eps)
     y_stats = _masked_channel_stats(y, y_mask, eps)
     metadata = load_metadata(dataset_dir)
     channel_names = metadata.get("channel_names") or [f"channel_{i}" for i in range(x.shape[-1])]
-
-    return {
+    stats = {
         "computed_from_split": split,
         "num_samples": int(indices.size),
         "channel_names": list(channel_names),
@@ -83,6 +91,19 @@ def compute_norm_stats(
         "normalization": "per_channel_zscore",
         "mask_convention": "True=valid, False=invalid",
     }
+    if has_meteo:
+        meteo_stats = _masked_channel_stats(x_meteo, meteo_mask, eps)
+        if not meteo_channel_names:
+            meteo_channel_names = [f"meteo_channel_{i}" for i in range(x_meteo.shape[-1])]
+        stats.update(
+            {
+                "meteo_channel_names": meteo_channel_names,
+                "meteo_mean": meteo_stats["mean"],
+                "meteo_std": meteo_stats["std"],
+                "meteo_count": meteo_stats["count"],
+            }
+        )
+    return stats
 
 
 def save_norm_stats(stats: dict[str, Any], output_path: str | Path) -> None:
@@ -105,4 +126,3 @@ def default_norm_stats_path(dataset_dir: str | Path = DEFAULT_DATASET_DIR) -> Pa
     """Return default norm stats path for a dataset directory."""
 
     return Path(dataset_dir) / DEFAULT_NORM_STATS_NAME
-

@@ -59,7 +59,7 @@ def test_zero_mean_residual_penalty_uses_masked_target_time_mean():
     assert zero_mean_residual_penalty(residual, mask).item() == 0.0
 
 
-def test_causal_htq_transformer_no_longer_enforces_zero_mean_residual():
+def test_causal_htq_transformer_default_does_not_enforce_zero_mean_residual():
     torch.manual_seed(2)
     model = CausalHTQTransformer()
     model.eval()
@@ -71,6 +71,8 @@ def test_causal_htq_transformer_no_longer_enforces_zero_mean_residual():
 
     expected = x_hourly[:, -1].unsqueeze(1) + out["residual"]
     assert torch.allclose(out["pred"], expected, atol=1e-6)
+    assert torch.isfinite(out["pred"]).all()
+    assert torch.isfinite(out["residual"]).all()
 
 
 def test_masked_l1_loss_ignores_invalid_positions():
