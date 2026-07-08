@@ -61,7 +61,12 @@ fusion:
   gate_init_bias: -2.0
 
 loss:
-  type: standard
+  type: fluctuation_aware
   lambda_l1: 1.0
+  lambda_weighted: 0.5
   lambda_temporal: 0.2
   lambda_vertical: 0.05
+  alpha: 1.0
+  gamma: 1.0
+  q_ref: 1.0
+  max_weight: 5.0

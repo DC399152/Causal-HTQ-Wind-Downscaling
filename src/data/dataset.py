@@ -106,6 +106,7 @@ class WindDownscalingDataset:
     - ``y_10min``: [T_out, H, C]
     - ``y_mask``: [T_out, H, C]
     - ``current_hourly``: [H, C]
+    - optional ``current_hourly_y_norm``: [H, C], only when ``normalize=True``
     - optional ``x_meteo``: [L, P, C_m]
     - optional ``meteo_mask``: [L, P, C_m]
     - optional ``x_static``: [F_static]
@@ -195,6 +196,7 @@ class WindDownscalingDataset:
         y_10min = data["y_10min"][sample_index]
         y_mask = data["y_mask"][sample_index].astype(bool)
         current_hourly = data["current_hourly"][sample_index]
+        current_hourly_y_norm = None
         has_meteo = "x_meteo" in data and "meteo_mask" in data
         if has_meteo:
             x_meteo = data["x_meteo"][sample_index]
@@ -210,8 +212,15 @@ class WindDownscalingDataset:
             x_std = np.asarray(self.norm_stats["x_std"], dtype=np.float32)
             y_mean = np.asarray(self.norm_stats["y_mean"], dtype=np.float32)
             y_std = np.asarray(self.norm_stats["y_std"], dtype=np.float32)
+            current_hourly_physical = current_hourly
             x_hourly = _normalize_array(x_hourly, x_mask, x_mean, x_std)
             y_10min = _normalize_array(y_10min, y_mask, y_mean, y_std)
+            current_hourly_y_norm = _normalize_array(
+                current_hourly_physical,
+                x_mask[-1],
+                y_mean,
+                y_std,
+            )
             current_hourly = _normalize_array(current_hourly, x_mask[-1], x_mean, x_std)
             if has_meteo:
                 if "meteo_mean" not in self.norm_stats or "meteo_std" not in self.norm_stats:
@@ -231,6 +240,11 @@ class WindDownscalingDataset:
             "current_hourly": _as_tensor(current_hourly, dtype=require_torch().float32),
             "sample_index": sample_index,
         }
+        if current_hourly_y_norm is not None:
+            item["current_hourly_y_norm"] = _as_tensor(
+                current_hourly_y_norm,
+                dtype=require_torch().float32,
+            )
         if has_meteo:
             item["x_meteo"] = _as_tensor(x_meteo, dtype=require_torch().float32)
             item["meteo_mask"] = _as_tensor(meteo_mask, dtype=require_torch().bool)

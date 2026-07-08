@@ -64,6 +64,11 @@ class CausalHTQTransformer(nn.Module):
     def __init__(self, config: HTQConfig | None = None) -> None:
         super().__init__()
         self.config = config or HTQConfig()
+        if self.config.enforce_zero_mean_residual:
+            raise ValueError(
+                "enforce_zero_mean_residual=True is disabled for this task. "
+                "Residuals must be allowed to have non-zero target-time mean."
+            )
 
         self.tokenizer = HeightTimeTokenizer(
             include_mask_features=True,
@@ -166,6 +171,7 @@ class CausalHTQTransformer(nn.Module):
         x_meteo: torch.Tensor | None = None,
         meteo_mask: torch.Tensor | None = None,
         x_static: torch.Tensor | None = None,
+        current_hourly_reference: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | dict[str, object] | None]:
         """Run minimal HTQ forward.
 
@@ -253,8 +259,20 @@ class CausalHTQTransformer(nn.Module):
             height_levels,
             self.config.output_channels,
         )
-        # pred: current hourly profile plus learned intra-hour residual.
-        current_hourly = x_hourly[:, -1]
+        # pred: reference hourly profile plus learned intra-hour residual.
+        # When training in normalized space, callers can pass a y-normalized
+        # current_hourly_reference so pred and y_10min use the same reference
+        # normalization. Falling back to x_hourly[:, -1] preserves old callers.
+        current_hourly = (
+            current_hourly_reference
+            if current_hourly_reference is not None
+            else x_hourly[:, -1]
+        )
+        if current_hourly.shape != x_hourly[:, -1].shape:
+            raise ValueError(
+                "current_hourly_reference must have shape [B, H, C], "
+                f"got {tuple(current_hourly.shape)}"
+            )
         pred = current_hourly.unsqueeze(1) + residual
         return {
             "pred": pred,

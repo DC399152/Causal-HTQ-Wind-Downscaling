@@ -3,28 +3,15 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from src.training.losses import (
+    htq_fluctuation_aware_loss,
     htq_reconstruction_loss,
     masked_l1_loss,
     masked_mae,
     masked_mse,
     temporal_gradient_loss,
     vertical_gradient_loss,
-    zero_mean_residual_penalty,
 )
-from src.models.htq_transformer import CausalHTQTransformer
-
-
-def test_zero_mean_residual_penalty_is_zero_for_balanced_residual():
-    residual = torch.tensor(
-        [
-            [
-                [[1.0], [2.0]],
-                [[-1.0], [-2.0]],
-            ]
-        ]
-    )
-
-    assert zero_mean_residual_penalty(residual).item() == 0.0
+from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
 
 
 def test_masked_mse_and_mae_ignore_invalid_positions():
@@ -34,29 +21,6 @@ def test_masked_mse_and_mae_ignore_invalid_positions():
 
     assert masked_mse(pred, target, mask).item() == 4.0
     assert masked_mae(pred, target, mask).item() == 2.0
-
-
-def test_zero_mean_residual_penalty_uses_masked_target_time_mean():
-    residual = torch.tensor(
-        [
-            [
-                [[1.0]],
-                [[-1.0]],
-                [[100.0]],
-            ]
-        ]
-    )
-    mask = torch.tensor(
-        [
-            [
-                [[True]],
-                [[True]],
-                [[False]],
-            ]
-        ]
-    )
-
-    assert zero_mean_residual_penalty(residual, mask).item() == 0.0
 
 
 def test_causal_htq_transformer_default_does_not_enforce_zero_mean_residual():
@@ -73,6 +37,11 @@ def test_causal_htq_transformer_default_does_not_enforce_zero_mean_residual():
     assert torch.allclose(out["pred"], expected, atol=1e-6)
     assert torch.isfinite(out["pred"]).all()
     assert torch.isfinite(out["residual"]).all()
+
+
+def test_causal_htq_transformer_rejects_zero_mean_residual_enforcement():
+    with pytest.raises(ValueError, match="enforce_zero_mean_residual"):
+        CausalHTQTransformer(HTQConfig(enforce_zero_mean_residual=True))
 
 
 def test_masked_l1_loss_ignores_invalid_positions():
@@ -117,3 +86,32 @@ def test_htq_reconstruction_loss_weighted_sum():
     assert parts["temporal"].item() == 1.0
     assert parts["vertical"].item() == 0.0
     assert parts["loss"].item() == pytest.approx(1.2)
+    assert "zero_mean" not in parts
+
+
+def test_fluctuation_aware_loss_returns_weighted_terms():
+    pred = torch.zeros(1, 2, 1, 2)
+    target = torch.tensor([[[[1.0, 0.0]], [[3.0, 4.0]]]])
+    mask = torch.ones_like(target, dtype=torch.bool)
+    current = torch.zeros(1, 1, 2)
+
+    parts = htq_fluctuation_aware_loss(
+        pred,
+        target,
+        mask,
+        current,
+        lambda_l1=1.0,
+        lambda_weighted=0.5,
+        lambda_temporal=0.2,
+        lambda_vertical=0.05,
+        alpha=1.0,
+        gamma=1.0,
+        q_ref=1.0,
+        max_weight=3.0,
+    )
+
+    assert set(parts) == {"loss", "l1", "weighted_l1", "temporal", "vertical", "mean_weight", "max_weight"}
+    assert parts["weighted_l1"].item() > 0.0
+    assert parts["mean_weight"].item() >= 1.0
+    assert parts["max_weight"].item() <= 3.0
+    assert torch.isfinite(parts["loss"])

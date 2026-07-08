@@ -100,7 +100,12 @@ class HeightTimeTokenizer(nn.Module):
         if self.include_delta_features:
             # delta: [B, L, H, C], with delta[:, 0] fixed to zero.
             delta = torch.zeros_like(x_hourly)
-            delta[:, 1:] = x_hourly[:, 1:] - x_hourly[:, :-1]
+            raw_delta = x_hourly[:, 1:] - x_hourly[:, :-1]
+            if x_mask is None:
+                delta[:, 1:] = raw_delta
+            else:
+                valid_delta = x_mask[:, 1:] & x_mask[:, :-1]
+                delta[:, 1:] = torch.where(valid_delta, raw_delta, torch.zeros_like(raw_delta))
             feature_parts.append(delta)
 
         if self.include_mask_features:

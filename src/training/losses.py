@@ -41,6 +41,20 @@ def masked_l1_loss(pred, target, mask, eps: float = 1e-8):
     return abs_error.sum() / valid.sum().clamp_min(eps)
 
 
+def masked_weighted_l1_loss(pred, target, mask, weight, eps: float = 1e-8):
+    """Weighted masked L1 over valid target positions.
+
+    Shapes:
+    - pred/target/mask: [B, T, H, C]
+    - weight: [B, T, H, 1] or [B, T, H, C]
+    """
+
+    valid = mask.to(dtype=pred.dtype)
+    weight = weight.to(dtype=pred.dtype)
+    abs_error = (pred - target).abs() * valid * weight
+    return abs_error.sum() / valid.sum().clamp_min(eps)
+
+
 def temporal_gradient_loss(pred, target, mask, eps: float = 1e-8):
     """Masked L1 loss on adjacent target-time gradients.
 
@@ -98,22 +112,68 @@ def htq_reconstruction_loss(
     }
 
 
-def zero_mean_residual_penalty(residual, mask=None, eps: float = 1e-8):
-    """Penalize non-zero target-time mean residuals.
+def htq_fluctuation_aware_loss(
+    pred,
+    target,
+    mask,
+    current_hourly_reference,
+    *,
+    lambda_l1: float = 1.0,
+    lambda_weighted: float = 0.5,
+    lambda_temporal: float = 0.2,
+    lambda_vertical: float = 0.05,
+    alpha: float = 1.0,
+    gamma: float = 1.0,
+    q_ref: float = 1.0,
+    max_weight: float = 5.0,
+    eps: float = 1e-8,
+):
+    """Fluctuation-aware normalized-space HTQ reconstruction loss.
 
-    If ``mask`` is provided, the target-time mean is computed over valid target
-    positions only. The residual shape is [B, T_out, H, C].
+    ``current_hourly_reference`` should be [B, H, C] in the same y-normalized
+    space as ``target``. Weights are derived from true residual magnitude and
+    detached so gradients flow only through prediction errors.
     """
 
-    if mask is None:
-        mean_residual = residual.mean(dim=1)
-        return (mean_residual * mean_residual).mean()
+    if current_hourly_reference is None:
+        raise ValueError("current_hourly_reference is required for fluctuation-aware loss")
+    if current_hourly_reference.ndim != 3:
+        raise ValueError("current_hourly_reference must have shape [B, H, C]")
 
-    valid = mask.to(dtype=residual.dtype)
-    numerator = (residual * valid).sum(dim=1)
-    denominator = valid.sum(dim=1).clamp_min(eps)
-    mean_residual = numerator / denominator
-    valid_any = mask.any(dim=1)
-    if not valid_any.any():
-        return residual.sum() * 0.0
-    return (mean_residual.pow(2) * valid_any.to(dtype=residual.dtype)).sum() / valid_any.to(dtype=residual.dtype).sum().clamp_min(eps)
+    true_residual = target - current_hourly_reference.unsqueeze(1)
+    if true_residual.shape[-1] < 2:
+        residual_mag = true_residual.abs().mean(dim=-1, keepdim=True)
+    else:
+        residual_mag = (true_residual[..., :2].pow(2).sum(dim=-1, keepdim=True) + eps).sqrt()
+
+    q_ref_tensor = pred.new_tensor(float(q_ref)).abs().clamp_min(eps)
+    weight = 1.0 + float(alpha) * (residual_mag / q_ref_tensor).clamp_min(0.0).pow(float(gamma))
+    weight = weight.clamp(max=float(max_weight)).detach()
+
+    l1 = masked_l1_loss(pred, target, mask, eps=eps)
+    weighted_l1 = masked_weighted_l1_loss(pred, target, mask, weight, eps=eps)
+    temporal = temporal_gradient_loss(pred, target, mask, eps=eps)
+    vertical = vertical_gradient_loss(pred, target, mask, eps=eps)
+    total = (
+        lambda_l1 * l1
+        + lambda_weighted * weighted_l1
+        + lambda_temporal * temporal
+        + lambda_vertical * vertical
+    )
+    valid_weight = weight.expand_as(mask).masked_select(mask)
+    if valid_weight.numel() == 0:
+        mean_weight = weight.sum() * 0.0
+        max_weight_value = weight.sum() * 0.0
+    else:
+        mean_weight = valid_weight.mean()
+        max_weight_value = valid_weight.max()
+    return {
+        "loss": total,
+        "l1": l1,
+        "weighted_l1": weighted_l1,
+        "temporal": temporal,
+        "vertical": vertical,
+        "mean_weight": mean_weight,
+        "max_weight": max_weight_value,
+    }
+

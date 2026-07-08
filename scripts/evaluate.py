@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.train import DEFAULT_DATASET_DIR, default_loss_weights, evaluate, make_loader
+from scripts.train import DEFAULT_DATASET_DIR, default_loss_config, default_loss_weights, evaluate, make_loader
 from src.data.dataset import load_norm_stats, require_torch
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
 from src.training.utils import get_device
@@ -42,6 +42,20 @@ def model_config_from_checkpoint(checkpoint: dict[str, Any]) -> HTQConfig:
     return HTQConfig(**config)
 
 
+def loss_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    """Load new loss_config or adapt older loss_weights checkpoints."""
+
+    if "loss_config" in checkpoint:
+        config = dict(default_loss_config())
+        config.update(checkpoint["loss_config"])
+        return config
+    weights = checkpoint.get("loss_weights") or default_loss_weights()
+    config = dict(default_loss_config())
+    config.update(weights)
+    config["type"] = "standard"
+    return config
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", default="runs/htq_minimal/best.pt")
@@ -64,7 +78,7 @@ def main() -> None:
     model = CausalHTQTransformer(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
-    loss_weights = checkpoint.get("loss_weights") or default_loss_weights()
+    loss_config = loss_config_from_checkpoint(checkpoint)
 
     norm_stats = load_norm_stats(Path(args.dataset_dir) / "norm_stats.json")
     results: dict[str, Any] = {
@@ -72,7 +86,12 @@ def main() -> None:
         "dataset_dir": str(args.dataset_dir),
         "device": str(device),
         "checkpoint_epoch": checkpoint.get("epoch"),
-        "loss_weights": loss_weights,
+        "loss_config": loss_config,
+        "loss_weights": {
+            "lambda_l1": float(loss_config["lambda_l1"]),
+            "lambda_temporal": float(loss_config["lambda_temporal"]),
+            "lambda_vertical": float(loss_config["lambda_vertical"]),
+        },
         "loss_space": "normalized",
         "metric_space": "physical_m_per_s",
         "splits": {},
@@ -83,10 +102,11 @@ def main() -> None:
     print(f"device: {device}")
     print(f"checkpoint_epoch: {checkpoint.get('epoch')}")
     print(
-        "loss: normalized weighted L1 "
-        f"(lambda_l1={loss_weights['lambda_l1']}, "
-        f"lambda_temporal={loss_weights['lambda_temporal']}, "
-        f"lambda_vertical={loss_weights['lambda_vertical']})"
+        f"loss: {loss_config['type']} normalized loss "
+        f"(lambda_l1={loss_config['lambda_l1']}, "
+        f"lambda_weighted={loss_config['lambda_weighted']}, "
+        f"lambda_temporal={loss_config['lambda_temporal']}, "
+        f"lambda_vertical={loss_config['lambda_vertical']})"
     )
     print("metrics: denormalized physical m/s")
 
@@ -104,7 +124,7 @@ def main() -> None:
                 loader,
                 norm_stats,
                 device,
-                loss_weights=loss_weights,
+                loss_config=loss_config,
                 limit_batches=args.limit_batches,
             )
             results["splits"][split] = metrics

@@ -85,3 +85,56 @@ def test_dataset_normalize_uses_stats_when_torch_available(tmp_path):
     assert item["x_meteo"].shape == (6, 5, 2)
     assert item["meteo_mask"].dtype == torch.bool
     assert torch.all(item["x_meteo"][~item["meteo_mask"]] == 0)
+
+
+def test_dataset_returns_current_hourly_y_norm_with_y_stats(tmp_path):
+    torch = pytest.importorskip("torch")
+
+    from src.data.dataset import WindDownscalingDataset
+
+    dataset_dir = tmp_path / "dataset"
+    split_dir = dataset_dir / "splits"
+    split_dir.mkdir(parents=True)
+
+    x = np.zeros((1, 6, 2, 2), dtype=np.float32)
+    x[:, -1] = np.asarray([[[20.0, 30.0], [40.0, 50.0]]], dtype=np.float32)
+    x_mask = np.ones_like(x, dtype=bool)
+    x_mask[:, -1, 1, 1] = False
+    y = np.zeros((1, 6, 2, 2), dtype=np.float32)
+    y_mask = np.ones_like(y, dtype=bool)
+
+    np.savez_compressed(
+        dataset_dir / "dataset.npz",
+        x_hourly=x,
+        x_mask=x_mask,
+        y_10min=y,
+        y_mask=y_mask,
+        current_hourly=x[:, -1],
+        station_id=np.asarray(["s0"], dtype=object),
+        target_time_start=np.asarray(["2024-01-01T00:00"], dtype=object),
+        target_times_10min=np.asarray([["2024-01-01T00:00"] * 6], dtype=object),
+        height_values=np.asarray([[250.0, 300.0]], dtype=np.float32),
+        source_file=np.asarray(["fake"], dtype=object),
+        split=np.asarray(["train"], dtype=object),
+    )
+    (split_dir / "train.txt").write_text("0\n", encoding="utf-8")
+
+    stats = {
+        "x_mean": [0.0, 0.0],
+        "x_std": [2.0, 10.0],
+        "y_mean": [10.0, 20.0],
+        "y_std": [5.0, 2.0],
+    }
+    stats_path = tmp_path / "norm_stats.json"
+    save_norm_stats(stats, stats_path)
+
+    dataset = WindDownscalingDataset(dataset_dir, split="train", normalize=True, norm_stats_path=stats_path)
+    item = dataset[0]
+
+    assert "current_hourly_y_norm" in item
+    assert item["current_hourly_y_norm"].shape == (2, 2)
+    expected_y_norm = torch.tensor([[2.0, 5.0], [6.0, 0.0]], dtype=torch.float32)
+    expected_x_norm = torch.tensor([[10.0, 3.0], [20.0, 0.0]], dtype=torch.float32)
+    assert torch.allclose(item["current_hourly_y_norm"], expected_y_norm)
+    assert torch.allclose(item["current_hourly"], expected_x_norm)
+    assert not torch.allclose(item["current_hourly_y_norm"], item["current_hourly"])

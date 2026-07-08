@@ -1,0 +1,83 @@
+{
+  "checkpoint": "runs/meteo_lcz_context_query_ref_fixed_standard/best.pt",
+  "dataset_dir": "data/datasets/ds_paris_1h_to_10min_6h_causal_start_v1",
+  "device": "cuda",
+  "checkpoint_epoch": 51,
+  "loss_config": {
+    "type": "standard",
+    "lambda_l1": 1.0,
+    "lambda_weighted": 0.0,
+    "lambda_temporal": 0.2,
+    "lambda_vertical": 0.05,
+    "alpha": 1.0,
+    "gamma": 1.0,
+    "q_ref": 1.0,
+    "max_weight": 5.0
+  },
+  "loss_weights": {
+    "lambda_l1": 1.0,
+    "lambda_temporal": 0.2,
+    "lambda_vertical": 0.05
+  },
+  "loss_space": "normalized",
+  "metric_space": "physical_m_per_s",
+  "splits": {
+    "train": {
+      "loss_norm_l1": 0.10836611477838408,
+      "loss_norm_temporal": 0.14465807931077096,
+      "loss_norm_vertical": 0.033920471135887406,
+      "loss_norm_total": 0.13899375510311895,
+      "MAE_ms": 0.6606157366731148,
+      "RMSE_ms": 1.0359362471296223,
+      "u_MAE_ms": 0.6847882566268455,
+      "v_MAE_ms": 0.6364432078218542,
+      "speed_MAE_ms": 0.6289220224993445,
+      "residual_ACC": 0.24478454441540054,
+      "temporal_gradient_MAE_ms": 0.8826174208935972,
+      "temporal_gradient_ACC": 0.07216873674450312,
+      "valid_target_values": 2250010.0,
+      "valid_speed_values": 1125005.0,
+      "valid_temporal_gradients": 1868658.0,
+      "valid_residual_acc_series": 376573.0,
+      "valid_temporal_gradient_acc_series": 376259.0
+    },
+    "val": {
+      "loss_norm_l1": 0.13040508215244,
+      "loss_norm_temporal": 0.1791739228826303,
+      "loss_norm_vertical": 0.04555743216322018,
+      "loss_norm_total": 0.1685177403000685,
+      "MAE_ms": 0.8077378112102483,
+      "RMSE_ms": 1.1854446577952626,
+      "u_MAE_ms": 0.8618987092567946,
+      "v_MAE_ms": 0.7535769432900414,
+      "speed_MAE_ms": 0.816152825082825,
+      "residual_ACC": 0.1896547165468032,
+      "temporal_gradient_MAE_ms": 1.1149495421075017,
+      "temporal_gradient_ACC": 0.05057057683504738,
+      "valid_target_values": 453818.0,
+      "valid_speed_values": 226909.0,
+      "valid_temporal_gradients": 376180.0,
+      "valid_residual_acc_series": 76150.0,
+      "valid_temporal_gradient_acc_series": 75975.0
+    },
+    "test": {
+      "loss_norm_l1": 0.11791343279182911,
+      "loss_norm_temporal": 0.16138989627361297,
+      "loss_norm_vertical": 0.03876628773286939,
+      "loss_norm_total": 0.15212972685694695,
+      "MAE_ms": 0.7196059163805754,
+      "RMSE_ms": 1.0701282942670587,
+      "u_MAE_ms": 0.7536733339360863,
+      "v_MAE_ms": 0.6855385339736357,
+      "speed_MAE_ms": 0.7167357300044644,
+      "residual_ACC": 0.18811023785239586,
+      "temporal_gradient_MAE_ms": 0.9858065070040692,
+      "temporal_gradient_ACC": 0.05026648765899834,
+      "valid_target_values": 361190.0,
+      "valid_speed_values": 180595.0,
+      "valid_temporal_gradients": 299442.0,
+      "valid_residual_acc_series": 60654.0,
+      "valid_temporal_gradient_acc_series": 60491.0
+    }
+  }
+}

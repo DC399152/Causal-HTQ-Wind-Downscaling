@@ -6,6 +6,7 @@ torch = pytest.importorskip("torch")
 
 from src.data.dataset import WindDownscalingDataset
 from src.models.htq_transformer import CausalHTQTransformer
+from scripts.train import compute_loss_parts, default_loss_config
 from src.training.losses import htq_reconstruction_loss
 
 
@@ -49,3 +50,19 @@ def test_one_step_backward_with_masked_loss_on_real_batch():
 
     assert finite_grad_count > 0
     assert nonzero_grad_count > 0
+
+
+def test_default_training_loss_config_is_standard_without_zero_mean():
+    config = default_loss_config()
+    assert config["type"] == "standard"
+
+    pred = torch.zeros(1, 2, 1, 1)
+    target = torch.ones(1, 2, 1, 1)
+    mask = torch.ones_like(target, dtype=torch.bool)
+    batch = {"y_10min": target, "y_mask": mask}
+
+    parts = compute_loss_parts(pred, batch, config)
+
+    assert "zero_mean" not in parts
+    assert "weighted_l1" not in parts
+    assert set(parts) == {"loss", "l1", "temporal", "vertical"}
