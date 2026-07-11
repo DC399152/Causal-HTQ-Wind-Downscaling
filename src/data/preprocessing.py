@@ -90,10 +90,13 @@ class PreprocessingConfig:
     hourly_channels: tuple[str, ...]
     target_channels: tuple[str, ...]
     height: HeightSelectionConfig
+    height_by_source: dict[str, HeightSelectionConfig]
+    sources: dict[str, Any]
     meteo: MeteoConfig
     static_features: StaticFeatureConfig
     quality: QualityControlConfig
     splits: SplitConfig
+    split_within_source: bool
     output_format: str
 
 
@@ -123,6 +126,7 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
     time = cfg.get("time", {})
     variables = dict(cfg.get("variables", {}))
     height_cfg = cfg.get("height_selection", {})
+    height_by_source_cfg = dict(height_cfg.get("by_source", {}))
     qc = cfg.get("quality_control", {})
     split = cfg.get("splits", {})
     output = cfg.get("output", {})
@@ -137,6 +141,23 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
         variables.get("target_channels"),
         cfg.get("features", {}).get("target_channels", ("u", "v")),
     )
+
+    default_height = HeightSelectionConfig(
+        selected_heights_agl=tuple(
+            float(v) for v in height_cfg.get("selected_heights_agl", [250, 275, 300, 325, 350, 375])
+        ),
+        height_reference=str(height_cfg.get("height_reference", "agl_rounded_station_altitude")),
+        max_height_diff=float(height_cfg.get("max_height_diff", 0.1)),
+    )
+    parsed_height_by_source: dict[str, HeightSelectionConfig] = {}
+    for source_name, source_height in height_by_source_cfg.items():
+        source_height = dict(source_height or {})
+        selected = source_height.get("selected_heights_agl", default_height.selected_heights_agl)
+        parsed_height_by_source[str(source_name)] = HeightSelectionConfig(
+            selected_heights_agl=tuple(float(v) for v in selected),
+            height_reference=str(source_height.get("height_reference", default_height.height_reference)),
+            max_height_diff=float(source_height.get("max_height_diff", default_height.max_height_diff)),
+        )
 
     return PreprocessingConfig(
         dataset_name=cfg["dataset_name"],
@@ -158,13 +179,9 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
         variables=variables,
         hourly_channels=tuple(str(v) for v in hourly_channels),
         target_channels=tuple(str(v) for v in target_channels),
-        height=HeightSelectionConfig(
-            selected_heights_agl=tuple(
-                float(v) for v in height_cfg.get("selected_heights_agl", [250, 275, 300, 325, 350, 375])
-            ),
-            height_reference=str(height_cfg.get("height_reference", "agl_rounded_station_altitude")),
-            max_height_diff=float(height_cfg.get("max_height_diff", 0.1)),
-        ),
+        height=default_height,
+        height_by_source=parsed_height_by_source,
+        sources=dict(cfg.get("sources", {})),
         meteo=MeteoConfig(
             enabled=bool(meteo_cfg.get("enabled", False)),
             source=str(meteo_cfg.get("source", "era5")),
@@ -201,6 +218,7 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             split_by_unique_time=bool(split.get("split_by_unique_time", True)),
             split_time_key=str(split.get("split_time_key", "target_time_start")),
         ),
+        split_within_source=bool(split.get("split_within_source", False)),
         output_format=str(output.get("format", "npz")),
     )
 
@@ -217,8 +235,10 @@ def validate_config(config: PreprocessingConfig) -> list[str]:
         raise ValueError("New preprocessing requires context_alignment=causal_last")
     if config.target_offsets_minutes != (0, 10, 20, 30, 40, 50):
         raise ValueError("New preprocessing requires target_offsets_minutes=[0,10,20,30,40,50]")
-    if config.context_hours != 6 or config.target_steps_per_hour != 6:
-        warnings.append("Expected L=6 and T_out=6 for v1 dataset")
+    if config.context_hours not in {6, 12}:
+        warnings.append("Expected context_hours to be 6 or 12 for planned datasets")
+    if config.target_steps_per_hour != 6:
+        warnings.append("Expected T_out=6 for 1h-to-10min datasets")
     if len(config.hourly_channels) != len(config.target_channels):
         raise ValueError("hourly_channels and target_channels must have equal length")
     if len(config.height.selected_heights_agl) != 6:

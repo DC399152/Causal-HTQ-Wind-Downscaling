@@ -8,6 +8,7 @@ import json
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from src.data.alignment import (
     AlignmentSpec,
@@ -62,6 +63,7 @@ class SampleAccumulator:
     target_times_10min: list[list[str]] = field(default_factory=list)
     height_values: list[np.ndarray] = field(default_factory=list)
     source_file: list[str] = field(default_factory=list)
+    source_group: list[str] = field(default_factory=list)
 
     def __len__(self) -> int:
         return len(self.x_hourly)
@@ -79,6 +81,7 @@ class StationSeries:
     target: dict[np.datetime64, np.ndarray] = field(default_factory=dict)
     hourly_source: dict[np.datetime64, str] = field(default_factory=dict)
     target_source: dict[np.datetime64, str] = field(default_factory=dict)
+    source_group: str = "paris_nc"
 
 
 def _required_hourly_variables(config: PreprocessingConfig) -> list[str]:
@@ -179,6 +182,10 @@ def _passes_sample_filters(
     return True
 
 
+def _height_config_for_source(config: PreprocessingConfig, source_name: str):
+    return config.height_by_source.get(source_name, config.height)
+
+
 def _append_sample(
     acc: SampleAccumulator,
     x: np.ndarray,
@@ -192,6 +199,7 @@ def _append_sample(
     target_times,
     height_values: np.ndarray,
     source_file: str,
+    source_group: str,
     config: PreprocessingConfig,
     x_meteo: np.ndarray | None = None,
     meteo_mask: np.ndarray | None = None,
@@ -223,6 +231,7 @@ def _append_sample(
     acc.target_times_10min.append(times_to_strings(target_times))
     acc.height_values.append(np.asarray(height_values, dtype=np.float32))
     acc.source_file.append(source_file)
+    acc.source_group.append(str(source_group))
 
 
 def _build_samples_from_pair(
@@ -270,7 +279,7 @@ def _build_samples_from_pair(
         station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
         try:
             heights_raw = _height_values_for_station(hourly_ds, config, station_idx)
-            height_meta = select_height_indices(heights_raw, station_altitude, config.height)
+            height_meta = select_height_indices(heights_raw, station_altitude, _height_config_for_source(config, "paris_nc"))
         except Exception as exc:
             warnings.append(f"Skipping station {station_id} in {pair.prefix}: {exc}")
             continue
@@ -311,6 +320,7 @@ def _build_samples_from_pair(
                 wanted_target_times,
                 actual_agl,
                 f"{pair.hourly_path.name}|{pair.target_path.name}",
+                "paris_nc",
                 config,
             )
 
@@ -366,7 +376,7 @@ def _load_pair_into_station_series(
         station_lon = station_value(hourly_ds, station_lon_name, station_idx, default=np.nan)
         try:
             heights_raw = _height_values_for_station(hourly_ds, config, station_idx)
-            height_meta = select_height_indices(heights_raw, station_altitude, config.height)
+            height_meta = select_height_indices(heights_raw, station_altitude, _height_config_for_source(config, "paris_nc"))
         except Exception as exc:
             warnings.append(f"Skipping station {station_id} in {pair.prefix}: {exc}")
             continue
@@ -382,6 +392,7 @@ def _load_pair_into_station_series(
                 actual_agl,
                 float(station_lat) if np.isfinite(station_lat) else None,
                 float(station_lon) if np.isfinite(station_lon) else None,
+                source_group="paris_nc",
             )
         series = series_by_station[station_id]
         if not np.allclose(series.height_values, actual_agl):
@@ -405,6 +416,158 @@ def _load_pair_into_station_series(
                 continue
             series.target[key] = station_target[idx]
             series.target_source[key] = source
+
+    return warnings
+
+
+def _parse_bool_series(values) -> np.ndarray:
+    """Parse bool-like CSV columns into a boolean numpy array."""
+
+    if values.dtype == bool:
+        return values.to_numpy(dtype=bool)
+    text = values.astype(str).str.strip().str.lower()
+    return text.isin({"true", "1", "yes", "y"})
+
+
+def _load_standard_csv_source(
+    source_name: str,
+    source_cfg: dict[str, Any],
+    config: PreprocessingConfig,
+    series_by_station: dict[str, StationSeries],
+) -> list[str]:
+    """Load a standard long-table source into global station series.
+
+    Expected CSV schema:
+    station_id,time_start,height,u,v,u_mask,v_mask,latitude,longitude,source_file,source_frequency
+    """
+
+    warnings: list[str] = []
+    hourly_path = Path(source_cfg["hourly_csv"])
+    target_path = Path(source_cfg["target_csv"])
+    if not hourly_path.exists():
+        raise FileNotFoundError(f"Standard hourly CSV not found: {hourly_path}")
+    if not target_path.exists():
+        raise FileNotFoundError(f"Standard target CSV not found: {target_path}")
+
+    hourly = pd.read_csv(hourly_path)
+    target = pd.read_csv(target_path)
+    required = {
+        "station_id",
+        "time_start",
+        "height",
+        "u",
+        "v",
+        "u_mask",
+        "v_mask",
+        "latitude",
+        "longitude",
+        "source_file",
+    }
+    for label, frame in (("hourly", hourly), ("target", target)):
+        missing = sorted(required - set(frame.columns))
+        if missing:
+            raise KeyError(f"{label} standard CSV is missing columns: {missing}")
+
+    height_config = _height_config_for_source(config, source_name)
+    if not height_config.selected_heights_agl:
+        warnings.append(
+            f"Standard source {source_name} has no selected_heights_agl; skipping source until config is completed."
+        )
+        return warnings
+
+    for frame in (hourly, target):
+        frame["time_start"] = pd.to_datetime(frame["time_start"], errors="coerce")
+        frame["height"] = pd.to_numeric(frame["height"], errors="coerce")
+        frame["u"] = pd.to_numeric(frame["u"], errors="coerce")
+        frame["v"] = pd.to_numeric(frame["v"], errors="coerce")
+        frame["latitude"] = pd.to_numeric(frame["latitude"], errors="coerce")
+        frame["longitude"] = pd.to_numeric(frame["longitude"], errors="coerce")
+        frame["u_mask_bool"] = _parse_bool_series(frame["u_mask"])
+        frame["v_mask_bool"] = _parse_bool_series(frame["v_mask"])
+
+    source_label = str(source_cfg.get("source_label", source_name))
+    selected = np.asarray(height_config.selected_heights_agl, dtype=float)
+
+    include_station_ids = {str(v) for v in source_cfg.get("include_station_ids", [])}
+    exclude_station_ids = {str(v) for v in source_cfg.get("exclude_station_ids", [])}
+    station_ids = sorted(set(hourly["station_id"].dropna().astype(str)) | set(target["station_id"].dropna().astype(str)))
+    if include_station_ids:
+        station_ids = [station_id for station_id in station_ids if station_id in include_station_ids]
+    if exclude_station_ids:
+        station_ids = [station_id for station_id in station_ids if station_id not in exclude_station_ids]
+    if not station_ids:
+        warnings.append(f"Standard source {source_name} has no stations after include/exclude filtering.")
+
+    for station_id in station_ids:
+        station_hourly_raw = hourly[hourly["station_id"].astype(str) == station_id].copy()
+        station_target_raw = target[target["station_id"].astype(str) == station_id].copy()
+        if station_hourly_raw.empty or station_target_raw.empty:
+            warnings.append(f"Standard source {source_name} station {station_id} missing hourly or target records.")
+            continue
+
+        raw_heights = np.asarray(sorted(station_hourly_raw["height"].dropna().unique()), dtype=float)
+        if raw_heights.size == 0:
+            warnings.append(f"Standard source {source_name} station {station_id} has no valid heights.")
+            continue
+        indices = np.asarray([int(np.argmin(np.abs(raw_heights - h))) for h in selected], dtype=np.int64)
+        actual = raw_heights[indices].astype(np.float32)
+        diff = np.abs(actual.astype(float) - selected)
+        if np.any(diff > height_config.max_height_diff):
+            warnings.append(
+                f"Skipping standard source {source_name} station {station_id}: "
+                f"height diff max={diff.max():.6g} exceeds {height_config.max_height_diff}."
+            )
+            continue
+        if len(np.unique(indices)) != len(indices):
+            warnings.append(
+                f"Skipping standard source {source_name} station {station_id}: selected heights map to duplicate raw layers."
+            )
+            continue
+
+        lat = float(station_hourly_raw["latitude"].median())
+        lon = float(station_hourly_raw["longitude"].median())
+        if station_id not in series_by_station:
+            series_by_station[station_id] = StationSeries(
+                station_id=station_id,
+                height_values=actual,
+                latitude=lat if np.isfinite(lat) else None,
+                longitude=lon if np.isfinite(lon) else None,
+                source_group=source_label,
+            )
+        series = series_by_station[station_id]
+        if not np.allclose(series.height_values, actual):
+            warnings.append(f"Station {station_id} height values differ across sources; keeping first source values.")
+
+        def add_records(frame, target_dict, source_dict, expected_step: str) -> None:
+            subset = frame[frame["height"].isin(actual.astype(float))].copy()
+            for time_start, time_group in subset.groupby("time_start", sort=True):
+                if pd.isna(time_start):
+                    continue
+                by_height = time_group.drop_duplicates("height", keep="first").set_index("height")
+                values = np.full((len(actual), 2), config.quality.missing_value, dtype=np.float32)
+                masks = np.zeros((len(actual), 2), dtype=bool)
+                for h_i, height in enumerate(actual.astype(float)):
+                    if height not in by_height.index:
+                        continue
+                    row = by_height.loc[height]
+                    u = float(row["u"])
+                    v = float(row["v"])
+                    u_valid = bool(row["u_mask_bool"]) and np.isfinite(u) and u != config.quality.missing_value
+                    v_valid = bool(row["v_mask_bool"]) and np.isfinite(v) and v != config.quality.missing_value
+                    values[h_i, 0] = u if u_valid else config.quality.missing_value
+                    values[h_i, 1] = v if v_valid else config.quality.missing_value
+                    masks[h_i, 0] = u_valid
+                    masks[h_i, 1] = v_valid
+                key = time_key(np.datetime64(time_start.to_datetime64(), "m"))
+                if key in target_dict:
+                    warnings.append(f"Duplicate {expected_step} timestamp for station {station_id}: {key}; keeping first value.")
+                    continue
+                target_dict[key] = values
+                source_files = sorted(set(str(v) for v in time_group["source_file"].dropna().unique()))
+                source_dict[key] = f"{source_name}:{';'.join(source_files)}"
+
+        add_records(station_hourly_raw, series.hourly, series.hourly_source, "hourly")
+        add_records(station_target_raw, series.target, series.target_source, "10min")
 
     return warnings
 
@@ -482,6 +645,7 @@ def _build_samples_from_global_series(
                 target_times,
                 series.height_values,
                 ";".join(source_files),
+                series.source_group,
                 config,
                 x_meteo=x_meteo,
                 meteo_mask=meteo_mask,
@@ -530,11 +694,12 @@ def _empty_arrays(config: PreprocessingConfig) -> dict[str, np.ndarray]:
         "target_times_10min": np.empty((0, t_out), dtype=object),
         "height_values": np.empty((0, h), dtype=np.float32),
         "source_file": np.empty((0,), dtype=object),
+        "source_group": np.empty((0,), dtype=object),
         "split": np.empty((0,), dtype=object),
     }
 
 
-def _split_labels(target_time_start: list[str], config: PreprocessingConfig) -> np.ndarray:
+def _split_labels_for_times(target_time_start: list[str], config: PreprocessingConfig) -> np.ndarray:
     """Create chronological split labels with an optional temporal embargo.
 
     Unique target times are split as:
@@ -583,10 +748,30 @@ def _split_labels(target_time_start: list[str], config: PreprocessingConfig) -> 
     return labels
 
 
+def _split_labels(
+    target_time_start: list[str],
+    source_group: list[str],
+    config: PreprocessingConfig,
+) -> np.ndarray:
+    """Create split labels globally or independently within each source group."""
+
+    if not config.split_within_source:
+        return _split_labels_for_times(target_time_start, config)
+
+    labels = np.full((len(target_time_start),), "gap", dtype=object)
+    groups = np.asarray(source_group, dtype=object)
+    times = np.asarray(target_time_start, dtype=object)
+    for group in sorted(set(source_group)):
+        indices = np.where(groups == group)[0]
+        group_labels = _split_labels_for_times(times[indices].tolist(), config)
+        labels[indices] = group_labels
+    return labels
+
+
 def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig) -> dict[str, np.ndarray]:
     if len(acc) == 0:
         return _empty_arrays(config)
-    split = _split_labels(acc.target_time_start, config)
+    split = _split_labels(acc.target_time_start, acc.source_group, config)
     arrays = {
         # x_hourly: [N, L=6, H=6, C=2]
         "x_hourly": np.stack(acc.x_hourly).astype(np.float32),
@@ -602,6 +787,7 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
         "target_times_10min": np.asarray(acc.target_times_10min, dtype=object),
         "height_values": np.stack(acc.height_values).astype(np.float32),
         "source_file": np.asarray(acc.source_file, dtype=object),
+        "source_group": np.asarray(acc.source_group, dtype=object),
         "split": split,
     }
     if acc.x_meteo:
@@ -644,6 +830,7 @@ def _write_dataset(
             "val_ratio": config.splits.val_ratio,
             "test_ratio": config.splits.test_ratio,
             "split_gap_hours": config.splits.split_gap_hours,
+            "split_within_source": config.split_within_source,
             "gap_label": "gap",
         },
         "split_counts": {
@@ -671,6 +858,15 @@ def _write_dataset(
             "has_x_static": "x_static" in arrays and arrays["x_static"].shape[-1] > 0,
         },
         "selected_heights_agl": list(config.height.selected_heights_agl),
+        "height_selection_by_source": {
+            name: {
+                "selected_heights_agl": list(height.selected_heights_agl),
+                "height_reference": height.height_reference,
+                "max_height_diff": height.max_height_diff,
+            }
+            for name, height in config.height_by_source.items()
+        },
+        "sources": config.sources,
         "missing_value": config.quality.missing_value,
         "raw_pairs": [
             {
@@ -698,59 +894,78 @@ def build_dataset(config: PreprocessingConfig, dry_run: bool = False) -> BuildSu
     """
 
     warnings = validate_config(config)
-    pairs = pair_nc_files(config.raw_3600s_dir, config.raw_600s_dir)
+    source_cfg = config.sources or {}
+    paris_cfg = dict(source_cfg.get("paris_nc", {}))
+    paris_enabled = bool(paris_cfg.get("enabled", True))
+    pairs = pair_nc_files(config.raw_3600s_dir, config.raw_600s_dir) if paris_enabled else []
     acc = SampleAccumulator()
     series_by_station: dict[str, StationSeries] = {}
     era5_data: Era5StationData | None = None
     static_data: StationStaticFeatures | None = None
 
-    if not pairs:
-        warnings.append("No paired *_3600s.nc / *_600s.nc files found; writing empty dataset.")
-    else:
+    if paris_enabled:
+        if not pairs:
+            warnings.append("Paris NC source enabled but no paired *_3600s.nc / *_600s.nc files found.")
         for pair in pairs:
             try:
                 warnings.extend(_load_pair_into_station_series(pair, config, series_by_station))
             except Exception as exc:
                 warnings.append(f"Skipping raw pair {pair.prefix}: {exc}")
-        if config.meteo.enabled:
-            station_locations = {
-                station_id: StationLocation(station_id, series.latitude, series.longitude)
-                for station_id, series in series_by_station.items()
-                if series.latitude is not None and series.longitude is not None
-            }
-            missing_locations = sorted(set(series_by_station) - set(station_locations))
-            if missing_locations:
-                warnings.append(
-                    "ERA5 enabled but station lat/lon missing for: "
-                    + ", ".join(missing_locations)
-                )
-            if station_locations:
-                era5_data = load_era5_for_stations(config.meteo, station_locations)
-                for station_id, method in sorted(era5_data.interpolation_method_by_station.items()):
-                    if method == "nearest":
-                        warnings.append(f"ERA5 nearest interpolation used for station {station_id}.")
-        if config.static_features.use_lcz:
-            static_data = load_station_static_features(
-                config.static_features.lcz_feature_csv,
-                config.static_features.feature_columns,
-                station_id_column=config.static_features.station_id_column,
-                dominant_lcz_column=config.static_features.dominant_lcz_column,
+
+    standard_sources = dict(source_cfg.get("standard_csv", {}))
+    for source_name, standard_cfg in standard_sources.items():
+        standard_cfg = dict(standard_cfg or {})
+        if not bool(standard_cfg.get("enabled", False)):
+            continue
+        try:
+            warnings.extend(_load_standard_csv_source(source_name, standard_cfg, config, series_by_station))
+        except Exception as exc:
+            warnings.append(f"Skipping standard CSV source {source_name}: {exc}")
+
+    if not series_by_station:
+        warnings.append("No station series were loaded from enabled sources; writing empty dataset.")
+
+    if config.meteo.enabled and series_by_station:
+        station_locations = {
+            station_id: StationLocation(station_id, series.latitude, series.longitude)
+            for station_id, series in series_by_station.items()
+            if series.latitude is not None and series.longitude is not None
+        }
+        missing_locations = sorted(set(series_by_station) - set(station_locations))
+        if missing_locations:
+            warnings.append(
+                "ERA5 enabled but station lat/lon missing for: "
+                + ", ".join(missing_locations)
             )
-            missing_static = sorted(set(series_by_station) - set(static_data.values_by_station))
-            if missing_static:
-                raise KeyError(
-                    "LCZ static features missing for station_id(s): "
-                    + ", ".join(missing_static)
-                )
-        warnings.extend(
-            _build_samples_from_global_series(
-                series_by_station,
-                config,
-                acc,
-                era5_data,
-                static_data,
-            )
+        if station_locations:
+            era5_data = load_era5_for_stations(config.meteo, station_locations)
+            for station_id, method in sorted(era5_data.interpolation_method_by_station.items()):
+                if method == "nearest":
+                    warnings.append(f"ERA5 nearest interpolation used for station {station_id}.")
+
+    if config.static_features.use_lcz and series_by_station:
+        static_data = load_station_static_features(
+            config.static_features.lcz_feature_csv,
+            config.static_features.feature_columns,
+            station_id_column=config.static_features.station_id_column,
+            dominant_lcz_column=config.static_features.dominant_lcz_column,
         )
+        missing_static = sorted(set(series_by_station) - set(static_data.values_by_station))
+        if missing_static:
+            raise KeyError(
+                "LCZ static features missing for station_id(s): "
+                + ", ".join(missing_static)
+            )
+
+    warnings.extend(
+        _build_samples_from_global_series(
+            series_by_station,
+            config,
+            acc,
+            era5_data,
+            static_data,
+        )
+    )
 
     arrays = _arrays_from_accumulator(acc, config)
     if era5_data is not None:

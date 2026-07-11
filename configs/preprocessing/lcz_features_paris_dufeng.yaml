@@ -1,0 +1,57 @@
+lcz:
+  raster_path: data/raw/lcz/global.tif
+  raster_crs: EPSG:4326
+  station_crs: EPSG:4326
+
+  class_values:
+    - 1
+    - 2
+    - 3
+    - 4
+    - 5
+    - 6
+    - 7
+    - 8
+    - 9
+    - 10
+    - 11
+    - 12
+    - 13
+    - 14
+    - 15
+    - 16
+    - 17
+
+  class_names:
+    1: Compact highrise
+    2: Compact midrise
+    3: Compact lowrise
+    4: Open highrise
+    5: Open midrise
+    6: Open lowrise
+    7: Lightweight low-rise
+    8: Large lowrise
+    9: Sparsely built
+    10: Heavy Industry
+    11: Dense trees
+    12: Scattered trees
+    13: Bush, scrub
+    14: Low plants
+    15: Bare rock or paved
+    16: Bare soil or sand
+    17: Water
+
+  extraction:
+    method: buffer_fraction
+    buffer_radii_m: [500]
+    nodata_values: [0, 255]
+    require_fraction_sum_close_to_one: true
+
+  station_metadata:
+    path: data/processed/stations/station_paris+dufeng.csv
+    id_column: station_id
+    latitude_column: latitude
+    longitude_column: longitude
+
+  output:
+    csv_path: data/processed/static/station_lcz_features_paris+dufeng_500m.csv

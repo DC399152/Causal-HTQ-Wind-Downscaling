@@ -47,6 +47,9 @@ class HTQConfig:
     query_builder_type: str = "context_conditioned"
     query_use_context_projection: bool = True
     query_use_context_layernorm: bool = True
+    query_use_temporal_context: bool = False
+    query_use_multiscale_trend: bool = False
+    query_trend_scales: tuple[int, ...] = (1, 3, 5)
     query_use_trend_context: bool = False
 
 
@@ -105,6 +108,9 @@ class CausalHTQTransformer(nn.Module):
                 height_levels=self.config.height_levels,
                 use_context_projection=self.config.query_use_context_projection,
                 use_context_layernorm=self.config.query_use_context_layernorm,
+                use_temporal_context=self.config.query_use_temporal_context,
+                use_multiscale_trend=self.config.query_use_multiscale_trend,
+                trend_scales=self.config.query_trend_scales,
                 use_trend_context=self.config.query_use_trend_context,
             )
         else:

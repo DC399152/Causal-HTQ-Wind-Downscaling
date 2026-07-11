@@ -85,6 +85,50 @@ def transform_lonlat_to_raster_crs(
     return float(x), float(y)
 
 
+def _build_metric_buffer_geometry(
+    longitude: float,
+    latitude: float,
+    *,
+    radius_m: float,
+    station_crs: str,
+    raster_crs: str,
+):
+    """Build a station buffer in raster CRS with radius interpreted in meters.
+
+    For projected rasters with meter units, this uses the raster CRS directly.
+    For geographic rasters such as EPSG:4326, it creates a local azimuthal
+    equidistant CRS centered on the station, buffers in meters, then transforms
+    the polygon back to the raster CRS.
+    """
+
+    try:
+        from pyproj import CRS, Transformer
+        from shapely.geometry import Point
+        from shapely.ops import transform as shapely_transform
+    except ImportError as exc:
+        raise RuntimeError("pyproj and shapely are required for LCZ buffer geometry.") from exc
+
+    raster = CRS.from_user_input(raster_crs)
+    if not raster.is_geographic:
+        x, y = transform_lonlat_to_raster_crs(
+            longitude,
+            latitude,
+            station_crs=station_crs,
+            raster_crs=raster_crs,
+        )
+        return Point(x, y).buffer(float(radius_m))
+
+    local_crs = CRS.from_proj4(
+        f"+proj=aeqd +lat_0={float(latitude)} +lon_0={float(longitude)} "
+        "+datum=WGS84 +units=m +no_defs"
+    )
+    station_to_local = Transformer.from_crs(station_crs, local_crs, always_xy=True)
+    local_to_raster = Transformer.from_crs(local_crs, raster, always_xy=True)
+    x_local, y_local = station_to_local.transform(float(longitude), float(latitude))
+    local_buffer = Point(float(x_local), float(y_local)).buffer(float(radius_m))
+    return shapely_transform(local_to_raster.transform, local_buffer)
+
+
 def extract_lcz_buffer_fraction(
     raster_path: str | Path,
     *,
@@ -105,7 +149,7 @@ def extract_lcz_buffer_fraction(
     try:
         import rasterio
         from rasterio.mask import mask
-        from shapely.geometry import Point, mapping
+        from shapely.geometry import mapping
     except ImportError as exc:
         raise RuntimeError("rasterio and shapely are required for LCZ raster extraction.") from exc
 
@@ -115,13 +159,19 @@ def extract_lcz_buffer_fraction(
         station_crs=station_crs,
         raster_crs=raster_crs,
     )
-    point_buffer = Point(x, y).buffer(float(radius_m))
 
     with rasterio.open(raster_path) as src:
         if src.crs is None:
             raise ValueError(f"LCZ raster has no CRS: {raster_path}")
         if str(src.crs).upper() != raster_crs.upper():
             raise ValueError(f"LCZ raster CRS mismatch: got {src.crs}, expected {raster_crs}")
+        point_buffer = _build_metric_buffer_geometry(
+            longitude,
+            latitude,
+            radius_m=radius_m,
+            station_crs=station_crs,
+            raster_crs=raster_crs,
+        )
         try:
             clipped, _ = mask(src, [mapping(point_buffer)], crop=True, filled=False, indexes=1)
         except ValueError:

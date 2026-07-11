@@ -28,7 +28,7 @@ from src.training.metrics import (
 from src.training.utils import get_device, set_seed, y_denormalize
 
 
-DEFAULT_CONFIG = "configs/htq/htq_paris_1h_to_10min_6h_causal_start_v1.yaml"
+DEFAULT_CONFIG = "configs/model/htq_meteo.yaml"
 DEFAULT_DATASET_DIR = "data/datasets/ds_paris_1h_to_10min_6h_causal_start_v1"
 DEFAULT_RUN_DIR = "runs/htq_minimal"
 
@@ -55,6 +55,7 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> HTQC
     fusion_cfg = config.get("fusion", {})
     query_cfg = config.get("query_builder", {})
     pressure_levels = tuple(int(v) for v in meteo_cfg.get("pressure_levels_hpa", [1000, 975, 950, 925, 900]))
+    trend_scales = tuple(int(v) for v in query_cfg.get("trend_scales", [1, 3, 5]))
     return HTQConfig(
         d_model=args.d_model or int(model_cfg.get("d_model", 64)),
         nhead=args.nhead or int(model_cfg.get("n_heads", model_cfg.get("nhead", 4))),
@@ -87,6 +88,11 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> HTQC
         query_builder_type=str(query_cfg.get("type", model_cfg.get("query_builder_type", "context_conditioned"))),
         query_use_context_projection=bool(query_cfg.get("use_context_projection", True)),
         query_use_context_layernorm=bool(query_cfg.get("use_context_layernorm", True)),
+        query_use_temporal_context=bool(query_cfg.get("use_temporal_context", False)),
+        query_use_multiscale_trend=bool(
+            query_cfg.get("use_multiscale_trend", query_cfg.get("use_trend_context", False))
+        ),
+        query_trend_scales=trend_scales,
         query_use_trend_context=bool(query_cfg.get("use_trend_context", False)),
     )
 

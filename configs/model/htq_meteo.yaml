@@ -50,10 +50,11 @@ static:
 
 query_builder:
   type: context_conditioned
-  context_source: current_hour_height
+  use_temporal_context: false
+  use_multiscale_trend: false
+  trend_scales: [1, 3, 5]
   use_context_projection: true
   use_context_layernorm: true
-  use_trend_context: false
 
 fusion:
   nhead: 4

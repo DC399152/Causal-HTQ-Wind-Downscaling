@@ -1,0 +1,51 @@
+station:
+  station_id: TODO_STATION_ID
+  latitude: null
+  longitude: null
+
+paths:
+  raw_csv_dir: data/raw/new_station_csv/TODO_STATION_ID
+  processed_dir: data/processed/new_station/TODO_STATION_ID
+
+input:
+  file_glob: "*.csv"
+  encoding: utf-8
+  delimiter: ","
+  timestamp_semantics: start
+  raw_frequency: auto  # one of: auto, 1min, 10min
+
+columns:
+  # Fill these after running scripts/inspect_new_station_csv.py.
+  time: TODO_TIME_COLUMN
+  height: TODO_HEIGHT_COLUMN
+  u: TODO_U_COLUMN
+  v: TODO_V_COLUMN
+  # Optional. Leave null if unavailable.
+  valid_flag: null
+  quality_flag: null
+
+time:
+  timezone: UTC
+  output_time_format: "%Y-%m-%dT%H:%M:%S"
+  require_regular_grid: false
+
+height_selection:
+  selected_heights_agl: [250, 275, 300, 325, 350, 375]
+  max_height_diff: 12.5
+
+quality_control:
+  missing_values: [-999, -999.0, 999, 999.0, "", "nan", "NaN"]
+  min_valid_fraction_10min: 0.5
+  min_valid_fraction_1h: 0.5
+
+aggregation:
+  make_10min: true
+  make_1h: true
+  # Timestamp labels are interval starts: 10:00 means [10:00, 10:10).
+  tenmin_rule: "10min"
+  hourly_rule: "1h"
+
+output:
+  tenmin_filename: "{station_id}_10min_standard.csv"
+  hourly_filename: "{station_id}_1h_standard.csv"
+  report_filename: "{station_id}_processing_report.json"
