@@ -2,6 +2,12 @@
 
 from __future__ import annotations
 
+import torch
+import warnings
+
+
+_WARNED_EXTREME_NORMALIZED_SPACE = False
+
 
 def _mask_denominator(mask, eps: float = 1e-8):
     return mask.to(dtype=float).sum().clamp_min(eps)
@@ -19,6 +25,12 @@ def masked_mse(pred, target, mask, eps: float = 1e-8):
     valid = mask.to(dtype=pred.dtype)
     sq_error = (pred - target).pow(2) * valid
     return sq_error.sum() / valid.sum().clamp_min(eps)
+
+
+def masked_mse_loss(pred, target, mask, eps: float = 1e-8):
+    """Compatibility wrapper for masked MSE."""
+
+    return masked_mse(pred, target, mask, eps=eps)
 
 
 def masked_mae(pred, target, mask, eps: float = 1e-8):
@@ -55,6 +67,10 @@ def masked_weighted_l1_loss(pred, target, mask, weight, eps: float = 1e-8):
     return abs_error.sum() / valid.sum().clamp_min(eps)
 
 
+def _zero_loss_like(reference):
+    return reference.sum() * 0.0
+
+
 def temporal_gradient_loss(pred, target, mask, eps: float = 1e-8):
     """Masked L1 loss on adjacent target-time gradients.
 
@@ -81,6 +97,45 @@ def vertical_gradient_loss(pred, target, mask, eps: float = 1e-8):
     dh_true = target[:, :, 1:] - target[:, :, :-1]
     dh_mask = mask[:, :, 1:] & mask[:, :, :-1]
     return masked_l1_loss(dh_pred, dh_true, dh_mask, eps=eps)
+
+
+def vertical_shear_loss(pred, target, mask, height, eps: float = 1e-8):
+    """Masked L1 loss on height-normalized vertical shear.
+
+    Shapes:
+    - pred/target/mask: [B, T, H, C]
+    - height: [H] or [B, H], same height units for all samples/channels
+
+    The shear is (value[h+1] - value[h]) / (z[h+1] - z[h]).
+    """
+
+    if height is None:
+        raise ValueError("height is required for vertical_shear_loss")
+    if height.ndim == 1:
+        dz = height[1:] - height[:-1]
+        dz = dz.reshape(1, 1, -1, 1)
+    elif height.ndim == 2:
+        dz = height[:, 1:] - height[:, :-1]
+        dz = dz.reshape(height.shape[0], 1, -1, 1)
+    else:
+        raise ValueError("height must have shape [H] or [B, H]")
+
+    dz = dz.to(device=pred.device, dtype=pred.dtype).abs().clamp_min(eps)
+    shear_pred = (pred[:, :, 1:] - pred[:, :, :-1]) / dz
+    shear_true = (target[:, :, 1:] - target[:, :, :-1]) / dz
+    shear_mask = mask[:, :, 1:] & mask[:, :, :-1]
+    return masked_l1_loss(shear_pred, shear_true, shear_mask, eps=eps)
+
+
+def second_order_temporal_roughness_loss(pred, target, mask, eps: float = 1e-8):
+    """Masked L1 loss on second-order target-time differences."""
+
+    if pred.shape[1] < 3:
+        return _zero_loss_like(pred)
+    pred_second = pred[:, 2:] - 2.0 * pred[:, 1:-1] + pred[:, :-2]
+    target_second = target[:, 2:] - 2.0 * target[:, 1:-1] + target[:, :-2]
+    second_mask = mask[:, 2:] & mask[:, 1:-1] & mask[:, :-2]
+    return masked_l1_loss(pred_second, target_second, second_mask, eps=eps)
 
 
 def htq_reconstruction_loss(
@@ -177,3 +232,127 @@ def htq_fluctuation_aware_loss(
         "max_weight": max_weight_value,
     }
 
+
+def residual_physics_loss(
+    pred_wind,
+    residual_pred,
+    target,
+    mask,
+    current_hourly_reference,
+    height=None,
+    *,
+    lambda_wind: float = 1.0,
+    lambda_residual: float = 0.5,
+    lambda_extreme: float = 0.3,
+    lambda_temporal: float = 0.2,
+    lambda_roughness: float = 0.1,
+    lambda_vertical: float = 0.05,
+    lambda_consistency: float = 0.1,
+    extreme_beta: float = 1.0,
+    extreme_threshold: float = 10.0,
+    extreme_scale: float = 2.0,
+    extreme_max_weight: float = 5.0,
+    y_mean=None,
+    y_std=None,
+    eps: float = 1e-8,
+):
+    """Residual-physics loss for normalized-space HTQ training.
+
+    The model predicts residuals internally, then forms
+    ``pred_wind = current_hourly_reference + residual_pred``. This loss keeps
+    the wind reconstruction objective while directly supervising the residual
+    field, residual temporal structure, height-normalized shear, and hourly
+    aggregate consistency.
+    """
+
+    if current_hourly_reference is None:
+        raise ValueError("current_hourly_reference is required for residual_physics_loss")
+    if residual_pred is None:
+        raise ValueError("residual_pred is required for residual_physics_loss")
+    if current_hourly_reference.ndim != 3:
+        raise ValueError("current_hourly_reference must have shape [B, H, C]")
+    if residual_pred.shape != pred_wind.shape:
+        raise ValueError("residual_pred must have the same shape as pred_wind")
+
+    true_residual = target - current_hourly_reference.unsqueeze(1)
+
+    wind = masked_l1_loss(pred_wind, target, mask, eps=eps)
+    residual = masked_l1_loss(residual_pred, true_residual, mask, eps=eps)
+
+    if y_mean is not None and y_std is not None:
+        y_mean_tensor = pred_wind.new_tensor(y_mean).reshape(1, 1, 1, -1)
+        y_std_tensor = pred_wind.new_tensor(y_std).reshape(1, 1, 1, -1)
+        target_for_speed = target * y_std_tensor + y_mean_tensor
+    else:
+        global _WARNED_EXTREME_NORMALIZED_SPACE
+        if not _WARNED_EXTREME_NORMALIZED_SPACE:
+            warnings.warn(
+                "residual_physics_loss received no y_mean/y_std; extreme wind "
+                "weights will be computed in normalized space, so threshold is "
+                "not in m/s.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _WARNED_EXTREME_NORMALIZED_SPACE = True
+        target_for_speed = target
+
+    if target_for_speed.shape[-1] >= 2:
+        wind_speed = (target_for_speed[..., :2].pow(2).sum(dim=-1, keepdim=True) + eps).sqrt()
+    else:
+        wind_speed = target_for_speed.abs().mean(dim=-1, keepdim=True)
+    scale = pred_wind.new_tensor(float(extreme_scale)).abs().clamp_min(eps)
+    weight = 1.0 + float(extreme_beta) * torch.sigmoid(
+        (wind_speed - float(extreme_threshold)) / scale
+    )
+    weight = weight.clamp(max=float(extreme_max_weight)).detach()
+    extreme = masked_weighted_l1_loss(pred_wind, target, mask, weight, eps=eps)
+
+    temporal = temporal_gradient_loss(residual_pred, true_residual, mask, eps=eps)
+    roughness = second_order_temporal_roughness_loss(residual_pred, true_residual, mask, eps=eps)
+
+    if float(lambda_vertical) == 0.0:
+        vertical = _zero_loss_like(pred_wind)
+    else:
+        vertical = vertical_shear_loss(pred_wind, target, mask, height, eps=eps)
+
+    if float(lambda_consistency) == 0.0:
+        consistency = _zero_loss_like(pred_wind)
+    else:
+        valid = mask.to(dtype=pred_wind.dtype)
+        hourly_pred = (pred_wind * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(eps)
+        consistency_mask = mask.any(dim=1)
+        consistency = masked_l1_loss(
+            hourly_pred,
+            current_hourly_reference,
+            consistency_mask,
+            eps=eps,
+        )
+
+    total = (
+        lambda_wind * wind
+        + lambda_residual * residual
+        + lambda_extreme * extreme
+        + lambda_temporal * temporal
+        + lambda_roughness * roughness
+        + lambda_vertical * vertical
+        + lambda_consistency * consistency
+    )
+    valid_weight = weight.expand_as(mask).masked_select(mask)
+    if valid_weight.numel() == 0:
+        mean_extreme_weight = _zero_loss_like(pred_wind)
+        max_extreme_weight = _zero_loss_like(pred_wind)
+    else:
+        mean_extreme_weight = valid_weight.mean()
+        max_extreme_weight = valid_weight.max()
+    return {
+        "loss": total,
+        "wind": wind,
+        "residual": residual,
+        "extreme": extreme,
+        "temporal": temporal,
+        "roughness": roughness,
+        "vertical": vertical,
+        "consistency": consistency,
+        "mean_extreme_weight": mean_extreme_weight,
+        "max_extreme_weight": max_extreme_weight,
+    }

@@ -106,6 +106,7 @@ class WindDownscalingDataset:
     - ``y_10min``: [T_out, H, C]
     - ``y_mask``: [T_out, H, C]
     - ``current_hourly``: [H, C]
+    - ``height``: [H], height values used by this sample
     - optional ``current_hourly_y_norm``: [H, C], only when ``normalize=True``
     - optional ``x_meteo``: [L, P, C_m]
     - optional ``meteo_mask``: [L, P, C_m]
@@ -196,6 +197,7 @@ class WindDownscalingDataset:
         y_10min = data["y_10min"][sample_index]
         y_mask = data["y_mask"][sample_index].astype(bool)
         current_hourly = data["current_hourly"][sample_index]
+        height = data["height_values"][sample_index].astype(np.float32)
         current_hourly_y_norm = None
         has_meteo = "x_meteo" in data and "meteo_mask" in data
         if has_meteo:
@@ -238,6 +240,7 @@ class WindDownscalingDataset:
             "y_10min": _as_tensor(y_10min, dtype=require_torch().float32),
             "y_mask": _as_tensor(y_mask, dtype=require_torch().bool),
             "current_hourly": _as_tensor(current_hourly, dtype=require_torch().float32),
+            "height": _as_tensor(height, dtype=require_torch().float32),
             "sample_index": sample_index,
         }
         if current_hourly_y_norm is not None:

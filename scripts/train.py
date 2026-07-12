@@ -18,7 +18,11 @@ if str(ROOT) not in sys.path:
 
 from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_torch
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
-from src.training.losses import htq_fluctuation_aware_loss, htq_reconstruction_loss
+from src.training.losses import (
+    htq_fluctuation_aware_loss,
+    htq_reconstruction_loss,
+    residual_physics_loss,
+)
 from src.training.metrics import (
     add_metric_sums,
     empty_physical_metric_sums,
@@ -144,10 +148,11 @@ def model_forward(model, batch: dict[str, Any]):
     )
 
 
-def compute_loss_parts(pred, batch: dict[str, Any], loss_config: dict[str, float | str]):
+def compute_loss_parts(outputs: dict[str, Any], batch: dict[str, Any], loss_config: dict[str, float | str]):
     """Compute the configured normalized-space training loss."""
 
     loss_type = str(loss_config.get("type", "standard"))
+    pred = outputs["pred"]
     common = {
         "lambda_l1": float(loss_config["lambda_l1"]),
         "lambda_temporal": float(loss_config["lambda_temporal"]),
@@ -159,6 +164,28 @@ def compute_loss_parts(pred, batch: dict[str, Any], loss_config: dict[str, float
             batch["y_10min"],
             batch["y_mask"],
             **common,
+        )
+    if loss_type == "residual_physics":
+        return residual_physics_loss(
+            pred,
+            outputs.get("residual"),
+            batch["y_10min"],
+            batch["y_mask"],
+            batch.get("current_hourly_y_norm"),
+            batch.get("height"),
+            lambda_wind=float(loss_config["lambda_wind"]),
+            lambda_residual=float(loss_config["lambda_residual"]),
+            lambda_extreme=float(loss_config["lambda_extreme"]),
+            lambda_temporal=float(loss_config["lambda_temporal"]),
+            lambda_roughness=float(loss_config["lambda_roughness"]),
+            lambda_vertical=float(loss_config["lambda_vertical"]),
+            lambda_consistency=float(loss_config["lambda_consistency"]),
+            extreme_beta=float(loss_config["extreme_beta"]),
+            extreme_threshold=float(loss_config["extreme_threshold"]),
+            extreme_scale=float(loss_config["extreme_scale"]),
+            extreme_max_weight=float(loss_config["extreme_max_weight"]),
+            y_mean=loss_config.get("y_mean"),
+            y_std=loss_config.get("y_std"),
         )
     if loss_type == "fluctuation_aware":
         return htq_fluctuation_aware_loss(
@@ -173,7 +200,10 @@ def compute_loss_parts(pred, batch: dict[str, Any], loss_config: dict[str, float
             max_weight=float(loss_config["max_weight"]),
             **common,
         )
-    raise ValueError(f"Unknown loss.type {loss_type!r}; expected 'standard' or 'fluctuation_aware'")
+    raise ValueError(
+        f"Unknown loss.type {loss_type!r}; expected 'standard', "
+        "'fluctuation_aware', or 'residual_physics'"
+    )
 
 
 def _add_loss_totals(total: dict[str, float], loss_parts: dict[str, Any]) -> None:
@@ -209,7 +239,7 @@ def train_one_epoch(
         batch = move_batch(batch, device)
         optimizer.zero_grad(set_to_none=True)
         out = model_forward(model, batch)
-        loss_parts = compute_loss_parts(out["pred"], batch, loss_config)
+        loss_parts = compute_loss_parts(out, batch, loss_config)
         loss = loss_parts["loss"]
         loss.backward()
         optimizer.step()
@@ -247,7 +277,7 @@ def evaluate(
                 break
             batch = move_batch(batch, device)
             out = model_forward(model, batch)
-            loss_parts = compute_loss_parts(out["pred"], batch, loss_config)
+            loss_parts = compute_loss_parts(out, batch, loss_config)
 
             pred_ms = y_denormalize(out["pred"], norm_stats)
             target_ms = y_denormalize(batch["y_10min"], norm_stats)
@@ -275,10 +305,19 @@ def default_loss_config() -> dict[str, float | str]:
         "lambda_weighted": 0.0,
         "lambda_temporal": 0.2,
         "lambda_vertical": 0.05,
+        "lambda_wind": 1.0,
+        "lambda_residual": 0.5,
+        "lambda_extreme": 0.3,
+        "lambda_roughness": 0.1,
+        "lambda_consistency": 0.1,
         "alpha": 1.0,
         "gamma": 1.0,
         "q_ref": 1.0,
         "max_weight": 5.0,
+        "extreme_beta": 1.0,
+        "extreme_threshold": 10.0,
+        "extreme_scale": 2.0,
+        "extreme_max_weight": 5.0,
     }
 
 
@@ -293,10 +332,44 @@ def default_loss_weights() -> dict[str, float]:
     }
 
 
+def describe_loss_type(loss_config: dict[str, float | str]) -> str:
+    """Human-readable loss formula for run metadata."""
+
+    loss_type = str(loss_config.get("type", "standard"))
+    if loss_type == "standard":
+        return "lambda_l1*masked_l1 + lambda_temporal*temporal_gradient_l1 + lambda_vertical*vertical_gradient_l1"
+    if loss_type == "fluctuation_aware":
+        return (
+            "lambda_l1*masked_l1 + lambda_weighted*fluctuation_weighted_l1 "
+            "+ lambda_temporal*temporal_gradient_l1 + lambda_vertical*vertical_gradient_l1"
+        )
+    if loss_type == "residual_physics":
+        return (
+            "lambda_wind*wind_l1 + lambda_residual*residual_l1 + "
+            "lambda_extreme*extreme_weighted_l1 + lambda_temporal*residual_temporal_l1 + "
+            "lambda_roughness*residual_second_order_l1 + lambda_vertical*vertical_shear_l1 + "
+            "lambda_consistency*hourly_consistency_l1"
+        )
+    return loss_type
+
+
+def attach_norm_stats_to_loss_config(
+    loss_config: dict[str, Any],
+    norm_stats: dict[str, Any],
+) -> dict[str, Any]:
+    """Attach y-normalization stats for losses that need physical thresholds."""
+
+    updated = dict(loss_config)
+    updated.setdefault("y_mean", norm_stats.get("y_mean"))
+    updated.setdefault("y_std", norm_stats.get("y_std"))
+    return updated
+
+
 def loss_config_from_config(config: dict[str, Any], args: argparse.Namespace) -> dict[str, float | str]:
     """Read loss config and allow CLI overrides for standard weights."""
 
     loss_cfg = config.get("loss", {})
+    extreme_cfg = loss_cfg.get("extreme", {})
     defaults = default_loss_config()
     return {
         "type": str(loss_cfg.get("type", defaults["type"])),
@@ -304,16 +377,29 @@ def loss_config_from_config(config: dict[str, Any], args: argparse.Namespace) ->
         if args.lambda_l1 is not None
         else float(loss_cfg.get("lambda_l1", defaults["lambda_l1"])),
         "lambda_weighted": float(loss_cfg.get("lambda_weighted", defaults["lambda_weighted"])),
+        "lambda_wind": float(loss_cfg.get("lambda_wind", defaults["lambda_wind"])),
+        "lambda_residual": float(loss_cfg.get("lambda_residual", defaults["lambda_residual"])),
+        "lambda_extreme": float(loss_cfg.get("lambda_extreme", defaults["lambda_extreme"])),
         "lambda_temporal": args.lambda_temporal
         if args.lambda_temporal is not None
         else float(loss_cfg.get("lambda_temporal", defaults["lambda_temporal"])),
+        "lambda_roughness": float(loss_cfg.get("lambda_roughness", defaults["lambda_roughness"])),
         "lambda_vertical": args.lambda_vertical
         if args.lambda_vertical is not None
         else float(loss_cfg.get("lambda_vertical", defaults["lambda_vertical"])),
+        "lambda_consistency": float(loss_cfg.get("lambda_consistency", defaults["lambda_consistency"])),
         "alpha": float(loss_cfg.get("alpha", defaults["alpha"])),
         "gamma": float(loss_cfg.get("gamma", defaults["gamma"])),
         "q_ref": float(loss_cfg.get("q_ref", defaults["q_ref"])),
         "max_weight": float(loss_cfg.get("max_weight", defaults["max_weight"])),
+        "extreme_beta": float(extreme_cfg.get("beta", loss_cfg.get("extreme_beta", defaults["extreme_beta"]))),
+        "extreme_threshold": float(
+            extreme_cfg.get("threshold", loss_cfg.get("extreme_threshold", defaults["extreme_threshold"]))
+        ),
+        "extreme_scale": float(extreme_cfg.get("scale", loss_cfg.get("extreme_scale", defaults["extreme_scale"]))),
+        "extreme_max_weight": float(
+            extreme_cfg.get("max_weight", loss_cfg.get("extreme_max_weight", defaults["extreme_max_weight"]))
+        ),
     }
 
 
@@ -432,6 +518,7 @@ def main() -> None:
     torch = require_torch()
     device = get_device(args.device)
     norm_stats = load_norm_stats(Path(dataset_dir) / "norm_stats.json")
+    loss_config = attach_norm_stats_to_loss_config(loss_config, norm_stats)
 
     model_config = build_model_config(config, args)
     model = CausalHTQTransformer(model_config).to(device)
@@ -570,7 +657,7 @@ def main() -> None:
         "history": history,
         "test": test_metrics,
         "loss_space": "normalized",
-        "loss_type": "lambda_l1*masked_l1 + lambda_temporal*temporal_gradient_l1 + lambda_vertical*vertical_gradient_l1",
+        "loss_type": describe_loss_type(loss_config),
         "metric_space": "physical_m_per_s",
     }
     with (run_dir / "metrics.json").open("w", encoding="utf-8") as f:
