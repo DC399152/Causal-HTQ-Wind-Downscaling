@@ -16,7 +16,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.train import DEFAULT_DATASET_DIR, default_loss_config, default_loss_weights, evaluate, make_loader
+from scripts.train import (
+    DEFAULT_DATASET_DIR,
+    attach_norm_stats_to_loss_config,
+    default_loss_config,
+    evaluate,
+    make_loader,
+)
 from src.data.dataset import load_norm_stats, require_torch
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
 from src.training.utils import get_device
@@ -43,17 +49,18 @@ def model_config_from_checkpoint(checkpoint: dict[str, Any]) -> HTQConfig:
 
 
 def loss_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
-    """Load new loss_config or adapt older loss_weights checkpoints."""
+    """Load residual-physics loss config from checkpoint metadata."""
 
     if "loss_config" in checkpoint:
         config = dict(default_loss_config())
         config.update(checkpoint["loss_config"])
+        if config.get("type") != "residual_physics":
+            raise ValueError(
+                f"Checkpoint loss.type={config.get('type')!r} is no longer supported; "
+                "only residual_physics is supported."
+            )
         return config
-    weights = checkpoint.get("loss_weights") or default_loss_weights()
-    config = dict(default_loss_config())
-    config.update(weights)
-    config["type"] = "standard"
-    return config
+    raise KeyError("Checkpoint is missing residual_physics loss_config")
 
 
 def parse_args() -> argparse.Namespace:
@@ -81,6 +88,7 @@ def main() -> None:
     loss_config = loss_config_from_checkpoint(checkpoint)
 
     norm_stats = load_norm_stats(Path(args.dataset_dir) / "norm_stats.json")
+    loss_config = attach_norm_stats_to_loss_config(loss_config, norm_stats)
     results: dict[str, Any] = {
         "checkpoint": str(args.checkpoint),
         "dataset_dir": str(args.dataset_dir),
@@ -88,9 +96,12 @@ def main() -> None:
         "checkpoint_epoch": checkpoint.get("epoch"),
         "loss_config": loss_config,
         "loss_weights": {
-            "lambda_l1": float(loss_config["lambda_l1"]),
+            "lambda_wind": float(loss_config["lambda_wind"]),
+            "lambda_extreme": float(loss_config["lambda_extreme"]),
             "lambda_temporal": float(loss_config["lambda_temporal"]),
+            "lambda_roughness": float(loss_config["lambda_roughness"]),
             "lambda_vertical": float(loss_config["lambda_vertical"]),
+            "lambda_consistency": float(loss_config["lambda_consistency"]),
         },
         "loss_space": "normalized",
         "metric_space": "physical_m_per_s",
@@ -103,9 +114,10 @@ def main() -> None:
     print(f"checkpoint_epoch: {checkpoint.get('epoch')}")
     print(
         f"loss: {loss_config['type']} normalized loss "
-        f"(lambda_l1={loss_config['lambda_l1']}, "
-        f"lambda_weighted={loss_config['lambda_weighted']}, "
+        f"(lambda_wind={loss_config['lambda_wind']}, "
+        f"lambda_extreme={loss_config['lambda_extreme']}, "
         f"lambda_temporal={loss_config['lambda_temporal']}, "
+        f"lambda_roughness={loss_config['lambda_roughness']}, "
         f"lambda_vertical={loss_config['lambda_vertical']})"
     )
     print("metrics: denormalized physical m/s")
@@ -131,8 +143,10 @@ def main() -> None:
             print(
                 f"{split}: "
                 f"loss_norm_total={metrics['loss_norm_total']:.6g} "
-                f"loss_norm_l1={metrics['loss_norm_l1']:.6g} "
+                f"loss_norm_wind={metrics['loss_norm_wind']:.6g} "
+                f"loss_norm_extreme={metrics['loss_norm_extreme']:.6g} "
                 f"loss_norm_temporal={metrics['loss_norm_temporal']:.6g} "
+                f"loss_norm_roughness={metrics['loss_norm_roughness']:.6g} "
                 f"loss_norm_vertical={metrics['loss_norm_vertical']:.6g} "
                 f"MAE_ms={metrics['MAE_ms']:.6g} "
                 f"RMSE_ms={metrics['RMSE_ms']:.6g} "

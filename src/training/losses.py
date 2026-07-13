@@ -138,101 +138,6 @@ def second_order_temporal_roughness_loss(pred, target, mask, eps: float = 1e-8):
     return masked_l1_loss(pred_second, target_second, second_mask, eps=eps)
 
 
-def htq_reconstruction_loss(
-    pred,
-    target,
-    mask,
-    *,
-    lambda_l1: float = 1.0,
-    lambda_temporal: float = 0.2,
-    lambda_vertical: float = 0.05,
-    eps: float = 1e-8,
-):
-    """Weighted normalized-space HTQ reconstruction loss.
-
-    total_loss = lambda_l1 * masked_l1_loss
-               + lambda_temporal * temporal_gradient_loss
-               + lambda_vertical * vertical_gradient_loss
-    """
-
-    l1 = masked_l1_loss(pred, target, mask, eps=eps)
-    temporal = temporal_gradient_loss(pred, target, mask, eps=eps)
-    vertical = vertical_gradient_loss(pred, target, mask, eps=eps)
-    total = lambda_l1 * l1 + lambda_temporal * temporal + lambda_vertical * vertical
-    return {
-        "loss": total,
-        "l1": l1,
-        "temporal": temporal,
-        "vertical": vertical,
-    }
-
-
-def htq_fluctuation_aware_loss(
-    pred,
-    target,
-    mask,
-    current_hourly_reference,
-    *,
-    lambda_l1: float = 1.0,
-    lambda_weighted: float = 0.5,
-    lambda_temporal: float = 0.2,
-    lambda_vertical: float = 0.05,
-    alpha: float = 1.0,
-    gamma: float = 1.0,
-    q_ref: float = 1.0,
-    max_weight: float = 5.0,
-    eps: float = 1e-8,
-):
-    """Fluctuation-aware normalized-space HTQ reconstruction loss.
-
-    ``current_hourly_reference`` should be [B, H, C] in the same y-normalized
-    space as ``target``. Weights are derived from true residual magnitude and
-    detached so gradients flow only through prediction errors.
-    """
-
-    if current_hourly_reference is None:
-        raise ValueError("current_hourly_reference is required for fluctuation-aware loss")
-    if current_hourly_reference.ndim != 3:
-        raise ValueError("current_hourly_reference must have shape [B, H, C]")
-
-    true_residual = target - current_hourly_reference.unsqueeze(1)
-    if true_residual.shape[-1] < 2:
-        residual_mag = true_residual.abs().mean(dim=-1, keepdim=True)
-    else:
-        residual_mag = (true_residual[..., :2].pow(2).sum(dim=-1, keepdim=True) + eps).sqrt()
-
-    q_ref_tensor = pred.new_tensor(float(q_ref)).abs().clamp_min(eps)
-    weight = 1.0 + float(alpha) * (residual_mag / q_ref_tensor).clamp_min(0.0).pow(float(gamma))
-    weight = weight.clamp(max=float(max_weight)).detach()
-
-    l1 = masked_l1_loss(pred, target, mask, eps=eps)
-    weighted_l1 = masked_weighted_l1_loss(pred, target, mask, weight, eps=eps)
-    temporal = temporal_gradient_loss(pred, target, mask, eps=eps)
-    vertical = vertical_gradient_loss(pred, target, mask, eps=eps)
-    total = (
-        lambda_l1 * l1
-        + lambda_weighted * weighted_l1
-        + lambda_temporal * temporal
-        + lambda_vertical * vertical
-    )
-    valid_weight = weight.expand_as(mask).masked_select(mask)
-    if valid_weight.numel() == 0:
-        mean_weight = weight.sum() * 0.0
-        max_weight_value = weight.sum() * 0.0
-    else:
-        mean_weight = valid_weight.mean()
-        max_weight_value = valid_weight.max()
-    return {
-        "loss": total,
-        "l1": l1,
-        "weighted_l1": weighted_l1,
-        "temporal": temporal,
-        "vertical": vertical,
-        "mean_weight": mean_weight,
-        "max_weight": max_weight_value,
-    }
-
-
 def residual_physics_loss(
     pred_wind,
     residual_pred,
@@ -242,7 +147,6 @@ def residual_physics_loss(
     height=None,
     *,
     lambda_wind: float = 1.0,
-    lambda_residual: float = 0.5,
     lambda_extreme: float = 0.3,
     lambda_temporal: float = 0.2,
     lambda_roughness: float = 0.1,
@@ -259,10 +163,11 @@ def residual_physics_loss(
     """Residual-physics loss for normalized-space HTQ training.
 
     The model predicts residuals internally, then forms
-    ``pred_wind = current_hourly_reference + residual_pred``. This loss keeps
-    the wind reconstruction objective while directly supervising the residual
-    field, residual temporal structure, height-normalized shear, and hourly
-    aggregate consistency.
+    ``pred_wind = current_hourly_reference + residual_pred``. Since
+    ``MAE(pred_wind, target)`` is mathematically identical to
+    ``MAE(residual_pred, true_residual)`` under this architecture, the direct
+    residual L1 term is intentionally omitted. Residuals are still used for
+    temporal and roughness structure losses.
     """
 
     if current_hourly_reference is None:
@@ -277,7 +182,6 @@ def residual_physics_loss(
     true_residual = target - current_hourly_reference.unsqueeze(1)
 
     wind = masked_l1_loss(pred_wind, target, mask, eps=eps)
-    residual = masked_l1_loss(residual_pred, true_residual, mask, eps=eps)
 
     if y_mean is not None and y_std is not None:
         y_mean_tensor = pred_wind.new_tensor(y_mean).reshape(1, 1, 1, -1)
@@ -330,7 +234,6 @@ def residual_physics_loss(
 
     total = (
         lambda_wind * wind
-        + lambda_residual * residual
         + lambda_extreme * extreme
         + lambda_temporal * temporal
         + lambda_roughness * roughness
@@ -347,7 +250,6 @@ def residual_physics_loss(
     return {
         "loss": total,
         "wind": wind,
-        "residual": residual,
         "extreme": extreme,
         "temporal": temporal,
         "roughness": roughness,

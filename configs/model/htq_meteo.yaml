@@ -62,7 +62,16 @@ fusion:
   gate_init_bias: -2.0
 
 loss:
-  type: standard
-  lambda_l1: 1.0
+  type: residual_physics
+  lambda_wind: 1.0
+  lambda_extreme: 0.0
   lambda_temporal: 0.2
+  lambda_roughness: 0.0
   lambda_vertical: 0.05
+  lambda_consistency: 0.0
+
+  extreme:
+    beta: 1.0
+    threshold: 10.0
+    scale: 2.0
+    max_weight: 5.0

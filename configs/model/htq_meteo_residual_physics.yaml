@@ -65,7 +65,6 @@ loss:
   type: residual_physics
 
   lambda_wind: 1.0
-  lambda_residual: 0.5
   lambda_extreme: 0.3
   lambda_temporal: 0.2
   lambda_roughness: 0.1

@@ -33,7 +33,6 @@ def test_residual_physics_loss_forward_and_keys():
     expected = {
         "loss",
         "wind",
-        "residual",
         "extreme",
         "temporal",
         "roughness",
