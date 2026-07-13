@@ -1,11 +1,11 @@
-dataset_name: ds_paris_dufeng_1h_to_10min_12h_causal_start_v2
+dataset_name: paris_dufeng_1h_to_10min_12h
 
 paths:
   raw_dir: data/raw
   raw_3600s_dir: data/raw
   raw_600s_dir: data/raw
   processed_dir: data/processed
-  dataset_dir: data/datasets/ds_paris_dufeng_1h_to_10min_12h_causal_start_v2
+  dataset_dir: data/datasets/paris_dufeng_1h_to_10min_12h
 
 time:
   timestamp_semantics: start
@@ -74,10 +74,10 @@ features:
 
 meteo:
   # Toggle for wind-only / wind+ERA5 / wind+ERA5+LCZ.
-  # Keep false until the replacement ERA5 files cover all enabled stations.
-  enabled: false
+  # ERA5 pressure-level temperature/humidity files covering Paris and Dufeng.
+  enabled: true
   source: era5
-  pressure_dir: data/ERA5_paris_humidity_tem/ERA5/ERA5_pressure
+  pressure_dir: data/ERA5
   interpolation: bilinear
   out_of_bounds: nearest
   variables:

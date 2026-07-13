@@ -114,7 +114,9 @@ def load_era5_for_stations(
                     method=config.interpolation,
                     out_of_bounds=config.out_of_bounds,
                 )
-                interpolation_method_by_station.setdefault(station_id, weights.method_used)
+                previous_method = interpolation_method_by_station.get(station_id)
+                if previous_method is None or weights.method_used == "bilinear":
+                    interpolation_method_by_station[station_id] = weights.method_used
                 interpolated = [interpolate_field(field, weights) for field in fields]
                 stacked = np.stack(interpolated, axis=-1).astype(np.float32)
                 valid = np.isfinite(stacked)

@@ -22,10 +22,15 @@ from scripts.train import (
     default_loss_config,
     evaluate,
     make_loader,
+    model_forward,
+    move_batch,
 )
-from src.data.dataset import load_norm_stats, require_torch
+from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_torch
+from src.models.baselines import repeat_current_hour
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
-from src.training.utils import get_device
+from src.training.utils import get_device, x_denormalize, y_denormalize
+from src.visualization.plot_samples import plot_sample_timeseries
+from src.visualization.plot_training_curves import plot_training_curves
 
 
 def load_checkpoint(path: str | Path, device):
@@ -73,6 +78,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--limit-batches", type=int, default=None)
     parser.add_argument("--output-json", default=None)
+    parser.add_argument("--output", dest="output_json", default=None, help="Alias for --output-json")
+    parser.add_argument("--make-plots", action="store_true", help="Write training curves and sample visualizations")
+    parser.add_argument("--figures-dir", default=None)
+    parser.add_argument("--num-random-plots", type=int, default=3)
+    parser.add_argument("--num-high-error-plots", type=int, default=3)
+    parser.add_argument("--num-high-fluctuation-plots", type=int, default=3)
+    parser.add_argument("--plot-split", default=None, help="Split used for sample plots; defaults to the last evaluated split")
+    parser.add_argument("--plot-seed", type=int, default=42)
     return parser.parse_args()
 
 
@@ -159,12 +172,232 @@ def main() -> None:
                 f"valid_target_values={int(metrics['valid_target_values'])}"
             )
 
-    if args.output_json:
-        output_path = Path(args.output_json)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with output_path.open("w", encoding="utf-8") as f:
-            json.dump(results, f, indent=2)
-        print(f"wrote: {output_path}")
+    output_path = Path(args.output_json) if args.output_json else Path(args.checkpoint).resolve().parent / "eval.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", encoding="utf-8") as f:
+        json.dump(results, f, indent=2)
+    print(f"wrote: {output_path}")
+
+    if args.make_plots:
+        figures_dir = Path(args.figures_dir) if args.figures_dir else output_path.parent / "figures"
+        written = make_plots(
+            args=args,
+            model=model,
+            norm_stats=norm_stats,
+            device=device,
+            figures_dir=figures_dir,
+        )
+        for path in written:
+            print(f"wrote: {path}")
+
+
+def make_plots(
+    *,
+    args: argparse.Namespace,
+    model,
+    norm_stats: dict[str, Any],
+    device,
+    figures_dir: Path,
+) -> list[Path]:
+    """Generate training curves and representative sample plots."""
+
+    written: list[Path] = []
+    metrics_path = Path(args.checkpoint).resolve().parent / "metrics.json"
+    if metrics_path.exists():
+        with metrics_path.open("r", encoding="utf-8") as f:
+            written.extend(plot_training_curves(json.load(f), figures_dir))
+    else:
+        print(f"warning: metrics.json not found, skipped loss curves: {metrics_path}")
+
+    plot_split = args.plot_split or args.splits[-1]
+    written.extend(
+        plot_representative_samples(
+            model=model,
+            dataset_dir=args.dataset_dir,
+            split=plot_split,
+            norm_stats=norm_stats,
+            device=device,
+            figures_dir=figures_dir,
+            seed=args.plot_seed,
+            num_random=args.num_random_plots,
+            num_high_error=args.num_high_error_plots,
+            num_high_fluctuation=args.num_high_fluctuation_plots,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            limit_batches=args.limit_batches,
+        )
+    )
+    return written
+
+
+def plot_representative_samples(
+    *,
+    model,
+    dataset_dir: str | Path,
+    split: str,
+    norm_stats: dict[str, Any],
+    device,
+    figures_dir: Path,
+    seed: int,
+    num_random: int,
+    num_high_error: int,
+    num_high_fluctuation: int,
+    batch_size: int,
+    num_workers: int,
+    limit_batches: int | None,
+) -> list[Path]:
+    """Select random/high-error/high-fluctuation samples and plot them."""
+
+    torch = require_torch()
+    dataset = WindDownscalingDataset(dataset_dir, split=split, normalize=True, return_metadata=False)
+    if len(dataset) == 0:
+        return []
+
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+    random_count = min(max(num_random, 0), len(dataset))
+    random_indices = torch.randperm(len(dataset), generator=rng)[:random_count].tolist()
+
+    scored = score_samples(
+        model=model,
+        dataset=dataset,
+        norm_stats=norm_stats,
+        device=device,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        limit_batches=limit_batches,
+    )
+    high_error_indices = [idx for idx, _ in sorted(scored["error"], key=lambda item: item[1], reverse=True)[: max(num_high_error, 0)]]
+    high_fluctuation_indices = [
+        idx
+        for idx, _ in sorted(scored["fluctuation"], key=lambda item: item[1], reverse=True)[: max(num_high_fluctuation, 0)]
+    ]
+
+    selected: list[tuple[str, int]] = []
+    selected.extend(("random", int(idx)) for idx in random_indices)
+    selected.extend(("high_error", int(idx)) for idx in high_error_indices)
+    selected.extend(("high_fluctuation", int(idx)) for idx in high_fluctuation_indices)
+
+    written: list[Path] = []
+    seen: set[tuple[str, int]] = set()
+    for label, local_index in selected:
+        key = (label, local_index)
+        if key in seen:
+            continue
+        seen.add(key)
+        rank = sum(1 for prev_label, _ in seen if prev_label == label)
+        output_path = figures_dir / f"sample_{label}_{rank:03d}.png"
+        plot_one_sample(
+            model=model,
+            dataset=dataset,
+            local_index=local_index,
+            split=split,
+            norm_stats=norm_stats,
+            device=device,
+            output_path=output_path,
+            label=label,
+        )
+        written.append(output_path)
+    return written
+
+
+def score_samples(
+    *,
+    model,
+    dataset: WindDownscalingDataset,
+    norm_stats: dict[str, Any],
+    device,
+    batch_size: int,
+    num_workers: int,
+    limit_batches: int | None,
+) -> dict[str, list[tuple[int, float]]]:
+    """Return per-sample error and true residual fluctuation scores."""
+
+    torch = require_torch()
+    loader = torch.utils.data.DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
+    errors: list[tuple[int, float]] = []
+    fluctuations: list[tuple[int, float]] = []
+    local_offset = 0
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(loader):
+            if limit_batches is not None and batch_idx >= limit_batches:
+                break
+            batch_size_actual = int(batch["y_10min"].shape[0])
+            batch = move_batch(batch, device)
+            out = model_forward(model, batch)
+            pred_ms = y_denormalize(out["pred"], norm_stats)
+            target_ms = y_denormalize(batch["y_10min"], norm_stats)
+            current_ms = x_denormalize(batch["current_hourly"], norm_stats)
+            valid = batch["y_mask"].to(dtype=pred_ms.dtype)
+
+            abs_error = ((pred_ms - target_ms).abs() * valid).flatten(start_dim=1)
+            valid_count = valid.flatten(start_dim=1).sum(dim=1).clamp_min(1.0)
+            sample_error = abs_error.sum(dim=1) / valid_count
+
+            residual = target_ms - current_ms.unsqueeze(1)
+            residual_mag = residual.pow(2).sum(dim=-1).sqrt()
+            both_valid = (batch["y_mask"][..., 0] & batch["y_mask"][..., 1]).to(dtype=residual_mag.dtype)
+            sample_fluct = (residual_mag * both_valid).flatten(start_dim=1).sum(dim=1) / both_valid.flatten(start_dim=1).sum(dim=1).clamp_min(1.0)
+
+            for i in range(batch_size_actual):
+                local_index = local_offset + i
+                errors.append((local_index, float(sample_error[i].detach().cpu().item())))
+                fluctuations.append((local_index, float(sample_fluct[i].detach().cpu().item())))
+            local_offset += batch_size_actual
+    return {"error": errors, "fluctuation": fluctuations}
+
+
+def plot_one_sample(
+    *,
+    model,
+    dataset: WindDownscalingDataset,
+    local_index: int,
+    split: str,
+    norm_stats: dict[str, Any],
+    device,
+    output_path: Path,
+    label: str,
+) -> None:
+    """Run model on one dataset item and save truth/pred/repeat plot."""
+
+    torch = require_torch()
+    item = WindDownscalingDataset(
+        dataset.dataset_dir,
+        split=split,
+        normalize=True,
+        return_metadata=True,
+    )[local_index]
+    batch = {
+        key: value.unsqueeze(0).to(device)
+        for key, value in item.items()
+        if hasattr(value, "unsqueeze") and key not in {"height_values"}
+    }
+    with torch.no_grad():
+        out = model_forward(model, batch)
+        pred_ms = y_denormalize(out["pred"], norm_stats)[0].cpu()
+        target_ms = y_denormalize(batch["y_10min"], norm_stats)[0].cpu()
+        current_ms = x_denormalize(batch["current_hourly"], norm_stats)[0].cpu()
+        repeat_ms = repeat_current_hour(current_ms.unsqueeze(0), target_steps=target_ms.shape[0])[0].cpu()
+
+    title = (
+        f"{label}, {split} local_index={local_index}, sample_index={item['sample_index']}, "
+        f"station={item.get('station_id', 'unknown')}, T={item.get('target_time_start', 'unknown')}"
+    )
+    plot_sample_timeseries(
+        target=target_ms,
+        pred=pred_ms,
+        repeat=repeat_ms,
+        y_mask=item["y_mask"],
+        height_values=[float(v) for v in item["height_values"]],
+        output_path=output_path,
+        title=title,
+    )
 
 
 if __name__ == "__main__":
