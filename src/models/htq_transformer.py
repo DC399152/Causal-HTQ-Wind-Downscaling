@@ -202,20 +202,25 @@ class CausalHTQTransformer(nn.Module):
         fusion_info = None
         aux_tokens_list: list[torch.Tensor] = []
         aux_padding_masks: list[torch.Tensor] = []
-        if self.config.use_meteo and x_meteo is not None:
+        if self.config.use_meteo:
+            if x_meteo is None:
+                raise ValueError("HTQConfig.use_meteo=True but x_meteo is missing from the batch")
+            if meteo_mask is None:
+                raise ValueError("HTQConfig.use_meteo=True but meteo_mask is missing from the batch")
             if self.meteo_encoder is None:
                 raise RuntimeError("Meteo encoder is not initialized")
             meteo_tokens = self.meteo_encoder(x_meteo, meteo_mask)
             aux_tokens_list.append(meteo_tokens)
-            if meteo_mask is not None:
-                # meteo_token_valid: [B, L, P], True if any meteo channel is valid.
-                meteo_token_valid = meteo_mask.any(dim=-1)
-                aux_padding_masks.append(~meteo_token_valid.reshape(
-                    meteo_token_valid.shape[0],
-                    meteo_token_valid.shape[1] * meteo_token_valid.shape[2],
-                ))
+            # meteo_token_valid: [B, L, P], True if any meteo channel is valid.
+            meteo_token_valid = meteo_mask.any(dim=-1)
+            aux_padding_masks.append(~meteo_token_valid.reshape(
+                meteo_token_valid.shape[0],
+                meteo_token_valid.shape[1] * meteo_token_valid.shape[2],
+            ))
 
-        if self.config.use_static and x_static is not None:
+        if self.config.use_static:
+            if x_static is None:
+                raise ValueError("HTQConfig.use_static=True but x_static is missing from the batch")
             if self.static_encoder is None:
                 raise RuntimeError("Static encoder is not initialized")
             static_tokens = self.static_encoder(x_static)
@@ -249,6 +254,7 @@ class CausalHTQTransformer(nn.Module):
         # target_queries: [B, T_out*H, d_model].
         target_queries = self.query_builder(
             encoder_memory,
+            token_valid=token_valid.reshape(batch_size, context_hours, height_levels),
             height_levels=height_levels,
         )
         decoded = self.decoder(

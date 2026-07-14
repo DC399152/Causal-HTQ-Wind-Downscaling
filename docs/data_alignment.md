@@ -51,10 +51,37 @@ The project should not use image-style `[B, C, H, T]` as the core representation
 
 ## Validation Checks
 
-The data builder should eventually verify:
+The data builder verifies:
 
 - Every target hour has all six 10 min target intervals.
 - The six target intervals are exactly 600 s apart.
 - The hourly timestamp matches the first target timestamp.
 - Context hours are consecutive 3600 s intervals.
 - No future hourly timestamp is included in a sample.
+- Hourly and target stations are matched by `station_id`, not by array position.
+- Paris NC hourly and target height indices are selected independently from their own height coordinates.
+- Hourly and target actual heights must be within the configured tolerance.
+- A station cannot silently mix incompatible height schemas across files.
+- `station_id + target_time_start` must be unique.
+
+## Audit Fields
+
+The core fields remain unchanged, but newer datasets also store audit fields:
+
+```text
+context_times_hourly: [N, L]
+hourly_height_values: [N, H]
+target_height_values: [N, H]
+hourly_source_files: [N, L]
+target_source_files: [N, T_out]
+```
+
+`height_values` is the representative height used by downstream code:
+
+```text
+height_values = 0.5 * (hourly_height_values + target_height_values)
+```
+
+This is only valid after the hourly/target height difference passes the configured tolerance check.
+
+`source_file` is kept for backward compatibility and is a summary set of the hourly and target source files used by the sample.

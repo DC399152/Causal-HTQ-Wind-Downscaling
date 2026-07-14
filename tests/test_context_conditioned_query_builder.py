@@ -163,6 +163,40 @@ def test_temporal_context_pooling_shape():
     assert torch.isfinite(context).all()
 
 
+def test_temporal_context_pooling_all_true_mask_matches_unmasked():
+    pooling = TemporalContextPooling(d_model=64)
+    memory_4d = torch.randn(2, 6, 6, 64)
+    valid_mask = torch.ones(2, 6, 6, dtype=torch.bool)
+
+    assert torch.allclose(pooling(memory_4d), pooling(memory_4d, valid_mask))
+
+
+def test_temporal_context_pooling_ignores_invalid_tokens():
+    pooling = TemporalContextPooling(d_model=64)
+    memory_4d = torch.randn(2, 6, 6, 64)
+    valid_mask = torch.ones(2, 6, 6, dtype=torch.bool)
+    valid_mask[:, 2, 3] = False
+    poisoned_memory = memory_4d.clone()
+    poisoned_memory[:, 2, 3] = 1e6
+
+    clean_context = pooling(memory_4d, valid_mask)
+    poisoned_context = pooling(poisoned_memory, valid_mask)
+
+    assert torch.allclose(clean_context, poisoned_context)
+
+
+def test_temporal_context_pooling_all_invalid_height_is_zero_and_finite():
+    pooling = TemporalContextPooling(d_model=64)
+    memory_4d = torch.randn(2, 6, 6, 64)
+    valid_mask = torch.ones(2, 6, 6, dtype=torch.bool)
+    valid_mask[:, :, 4] = False
+
+    context = pooling(memory_4d, valid_mask)
+
+    assert torch.isfinite(context).all()
+    assert torch.allclose(context[:, 4], torch.zeros_like(context[:, 4]))
+
+
 def test_multiscale_trend_handles_short_context_safely():
     trend = MultiScaleTrendEmbedding(d_model=64, trend_scales=(1, 3, 5))
     memory_4d = torch.randn(2, 3, 6, 64)
@@ -171,3 +205,44 @@ def test_multiscale_trend_handles_short_context_safely():
 
     assert context.shape == (2, 6, 64)
     assert torch.isfinite(context).all()
+
+
+def test_multiscale_trend_all_true_mask_matches_unmasked():
+    trend = MultiScaleTrendEmbedding(d_model=64, trend_scales=(1, 3, 5))
+    memory_4d = torch.randn(2, 6, 6, 64)
+    valid_mask = torch.ones(2, 6, 6, dtype=torch.bool)
+
+    assert torch.allclose(trend(memory_4d), trend(memory_4d, valid_mask))
+
+
+def test_multiscale_trend_invalid_current_or_past_is_zero():
+    trend = MultiScaleTrendEmbedding(d_model=64, trend_scales=(1,))
+    memory_4d = torch.randn(2, 6, 6, 64)
+    valid_mask = torch.ones(2, 6, 6, dtype=torch.bool)
+    valid_mask[:, -1, 0] = False
+    valid_mask[:, -2, 1] = False
+
+    context = trend(memory_4d, valid_mask)
+
+    assert torch.allclose(context[:, 0], torch.zeros_like(context[:, 0]))
+    assert torch.allclose(context[:, 1], torch.zeros_like(context[:, 1]))
+    assert torch.isfinite(context).all()
+
+
+def test_context_conditioned_query_builder_accepts_token_valid_mask():
+    builder = ContextConditionedQueryBuilder(
+        d_model=64,
+        target_steps=6,
+        context_hours=6,
+        height_levels=6,
+        use_temporal_context=True,
+        use_multiscale_trend=True,
+    )
+    encoder_memory = torch.randn(2, 36, 64)
+    token_valid = torch.ones(2, 6, 6, dtype=torch.bool)
+    token_valid[:, :, 5] = False
+
+    queries = builder(encoder_memory, token_valid=token_valid)
+
+    assert queries.shape == (2, 36, 64)
+    assert torch.isfinite(queries).all()

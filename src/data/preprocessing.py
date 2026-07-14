@@ -69,6 +69,15 @@ class StaticFeatureConfig:
 
 
 @dataclass(frozen=True)
+class DataAlignmentConfig:
+    """Strict pairing and schema validation settings."""
+
+    station_matching_mode: str
+    max_hourly_target_height_diff_m: float
+    height_schema_policy: str
+
+
+@dataclass(frozen=True)
 class PreprocessingConfig:
     """Normalized preprocessing YAML config."""
 
@@ -94,6 +103,7 @@ class PreprocessingConfig:
     sources: dict[str, Any]
     meteo: MeteoConfig
     static_features: StaticFeatureConfig
+    data_alignment: DataAlignmentConfig
     quality: QualityControlConfig
     splits: SplitConfig
     split_within_source: bool
@@ -124,6 +134,8 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
     cfg = load_yaml_config(path)
     paths = cfg.get("paths", {})
     time = cfg.get("time", {})
+    if "raw_timestamp_semantics" not in time:
+        raise ValueError("time.raw_timestamp_semantics must be explicitly set to start or end")
     variables = dict(cfg.get("variables", {}))
     height_cfg = cfg.get("height_selection", {})
     height_by_source_cfg = dict(height_cfg.get("by_source", {}))
@@ -132,6 +144,7 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
     output = cfg.get("output", {})
     meteo_cfg = cfg.get("meteo", {})
     static_cfg = cfg.get("static_features", {})
+    alignment_cfg = cfg.get("data_alignment", {})
 
     hourly_channels = _as_tuple(
         variables.get("hourly_channels"),
@@ -201,6 +214,13 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             station_id_column=str(static_cfg.get("station_id_column", "station_id")),
             dominant_lcz_column=str(static_cfg.get("dominant_lcz_column", "dominant_lcz_500m")),
         ),
+        data_alignment=DataAlignmentConfig(
+            station_matching_mode=str(alignment_cfg.get("station_matching_mode", "strict")),
+            max_hourly_target_height_diff_m=float(
+                alignment_cfg.get("max_hourly_target_height_diff_m", 2.0)
+            ),
+            height_schema_policy=str(alignment_cfg.get("height_schema_policy", "error")),
+        ),
         quality=QualityControlConfig(
             missing_value=float(qc.get("missing_value", -999.0)),
             allow_missing=bool(qc.get("allow_missing", True)),
@@ -231,6 +251,12 @@ def validate_config(config: PreprocessingConfig) -> list[str]:
         raise ValueError("New preprocessing requires timestamp_semantics=start")
     if config.raw_timestamp_semantics not in {"start", "end"}:
         raise ValueError("raw_timestamp_semantics must be start or end")
+    if config.data_alignment.station_matching_mode not in {"strict", "intersection"}:
+        raise ValueError("data_alignment.station_matching_mode must be strict or intersection")
+    if config.data_alignment.height_schema_policy not in {"error"}:
+        raise ValueError("Only data_alignment.height_schema_policy=error is currently supported")
+    if config.data_alignment.max_hourly_target_height_diff_m < 0:
+        raise ValueError("data_alignment.max_hourly_target_height_diff_m must be non-negative")
     if config.context_alignment != "causal_last":
         raise ValueError("New preprocessing requires context_alignment=causal_last")
     if config.target_offsets_minutes != (0, 10, 20, 30, 40, 50):

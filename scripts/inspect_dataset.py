@@ -46,6 +46,13 @@ def main() -> None:
                     print(f"  pressure_levels_hpa: {data['meteo_pressure_levels'].tolist()}")
                 if "meteo_channel_names" in data:
                     print(f"  channel_names: {[str(v) for v in data['meteo_channel_names']]}")
+            if "hourly_height_values" in data and "target_height_values" in data:
+                diff = np.abs(data["hourly_height_values"].astype(float) - data["target_height_values"].astype(float))
+                print("height alignment:")
+                print(f"  hourly_height_values shape: {data['hourly_height_values'].shape}")
+                print(f"  target_height_values shape: {data['target_height_values'].shape}")
+                print(f"  max hourly-target diff m: {float(np.nanmax(diff)) if diff.size else 0.0:.6f}")
+                print(f"  mean hourly-target diff m: {float(np.nanmean(diff)) if diff.size else 0.0:.6f}")
             if "x_static" in data and data["x_static"].shape[-1] > 0:
                 x_static = data["x_static"]
                 print("static:")
@@ -77,6 +84,8 @@ def main() -> None:
             metadata = json.load(f)
         for key in ("dataset_name", "timestamp_semantics", "context_alignment", "target_offsets_minutes"):
             print(f"  {key}: {metadata.get(key)}")
+        if metadata.get("data_alignment"):
+            print(f"  data_alignment: {metadata.get('data_alignment')}")
         if metadata.get("split_policy"):
             print(f"  split_policy: {metadata.get('split_policy')}")
         if metadata.get("split_counts"):

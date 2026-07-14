@@ -24,6 +24,7 @@ class FixedTargetQueryBuilder(nn.Module):
         self,
         encoder_memory: torch.Tensor | None = None,
         *,
+        token_valid: torch.Tensor | None = None,
         batch_size: int | None = None,
         height_levels: int | None = None,
         device: torch.device | None = None,
@@ -64,12 +65,25 @@ class TemporalContextPooling(nn.Module):
         super().__init__()
         self.score = nn.Linear(d_model, 1)
 
-    def forward(self, memory_4d: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        memory_4d: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if memory_4d.ndim != 4:
             raise ValueError("memory_4d must have shape [B, L, H, D]")
 
         scores = self.score(memory_4d)  # [B, L, H, 1].
+        if valid_mask is not None:
+            if valid_mask.shape != memory_4d.shape[:3]:
+                raise ValueError("valid_mask must have shape [B, L, H]")
+            valid = valid_mask.unsqueeze(-1)
+            scores = scores.masked_fill(~valid, -1e9)
         weights = torch.softmax(scores, dim=1)
+        if valid_mask is not None:
+            valid_float = valid.to(dtype=weights.dtype)
+            weights = weights * valid_float
+            weights = weights / weights.sum(dim=1, keepdim=True).clamp_min(1e-8)
         return torch.sum(weights * memory_4d, dim=1)  # [B, H, D].
 
 
@@ -90,23 +104,63 @@ class MultiScaleTrendEmbedding(nn.Module):
         )
         self.output_projection = nn.Linear(d_model * len(self.trend_scales), d_model)
 
-    def forward(self, memory_4d: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        memory_4d: torch.Tensor,
+        valid_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         if memory_4d.ndim != 4:
             raise ValueError("memory_4d must have shape [B, L, H, D]")
         if memory_4d.shape[-1] != self.d_model:
             raise ValueError(f"memory_4d hidden dimension must be {self.d_model}")
+        if valid_mask is not None and valid_mask.shape != memory_4d.shape[:3]:
+            raise ValueError("valid_mask must have shape [B, L, H]")
 
         context_hours = memory_4d.shape[1]
         current = memory_4d[:, -1]
         projected_trends = []
+        valid_trends = []
         for scale, projection in zip(self.trend_scales, self.scale_projections):
+            trend_valid = None
             if context_hours > scale:
                 raw_trend = current - memory_4d[:, -(scale + 1)]
+                if valid_mask is not None:
+                    trend_valid = valid_mask[:, -1] & valid_mask[:, -(scale + 1)]
+                    raw_trend = torch.where(
+                        trend_valid.unsqueeze(-1),
+                        raw_trend,
+                        torch.zeros_like(raw_trend),
+                    )
             else:
                 raw_trend = torch.zeros_like(current)
-            projected_trends.append(projection(raw_trend))
+                if valid_mask is not None:
+                    trend_valid = torch.zeros(
+                        current.shape[:2],
+                        dtype=torch.bool,
+                        device=current.device,
+                    )
+            projected = projection(raw_trend)
+            if valid_mask is not None:
+                if trend_valid is None:
+                    raise RuntimeError("trend_valid was not built for masked trend")
+                projected = torch.where(
+                    trend_valid.unsqueeze(-1),
+                    projected,
+                    torch.zeros_like(projected),
+                )
+            projected_trends.append(projected)
+            if valid_mask is not None:
+                valid_trends.append(trend_valid)
 
-        return self.output_projection(torch.cat(projected_trends, dim=-1))
+        trend_context = self.output_projection(torch.cat(projected_trends, dim=-1))
+        if valid_mask is not None:
+            any_valid = torch.stack(valid_trends, dim=0).any(dim=0)
+            trend_context = torch.where(
+                any_valid.unsqueeze(-1),
+                trend_context,
+                torch.zeros_like(trend_context),
+            )
+        return trend_context
 
 
 class ContextConditionedQueryBuilder(nn.Module):
@@ -185,6 +239,7 @@ class ContextConditionedQueryBuilder(nn.Module):
         self,
         encoder_memory: torch.Tensor,
         *,
+        token_valid: torch.Tensor | None = None,
         height_levels: int | None = None,
     ) -> torch.Tensor:
         """Return context-conditioned queries [B, T_out * H, d_model]."""
@@ -210,14 +265,25 @@ class ContextConditionedQueryBuilder(nn.Module):
                 self.d_model,
             )
             memory_4d = memory_4d[:, :, :height_levels, :]
+            valid_mask = None
+            if token_valid is not None:
+                if token_valid.ndim == 2:
+                    token_valid = token_valid.reshape(
+                        batch_size,
+                        self.context_hours,
+                        self.height_levels,
+                    )
+                if token_valid.shape != (batch_size, self.context_hours, self.height_levels):
+                    raise ValueError("token_valid must have shape [B, L*H] or [B, L, H]")
+                valid_mask = token_valid[:, :, :height_levels]
 
             temporal_context = None
             if self.temporal_pooling is not None:
-                temporal_context = self.temporal_pooling(memory_4d)
+                temporal_context = self.temporal_pooling(memory_4d, valid_mask)
 
             trend_context = None
             if self.trend_embedding is not None:
-                trend_context = self.trend_embedding(memory_4d)
+                trend_context = self.trend_embedding(memory_4d, valid_mask)
 
             if temporal_context is not None and trend_context is not None:
                 if self.context_fusion is None:

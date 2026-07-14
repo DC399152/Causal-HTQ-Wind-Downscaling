@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import sys
 from typing import Any
@@ -397,6 +398,25 @@ def save_checkpoint(
     )
 
 
+def validate_monitor_value(monitor_name: str, monitor_value: float) -> None:
+    """Fail fast when the validation monitor cannot define a best checkpoint."""
+
+    if not math.isfinite(monitor_value):
+        raise ValueError(f"Validation monitor {monitor_name} is not finite: {monitor_value}")
+
+
+def load_best_checkpoint_for_test(best_checkpoint_path: str | Path, model, device) -> dict[str, Any]:
+    """Load best.pt into ``model`` before final test evaluation."""
+
+    torch = require_torch()
+    best_checkpoint_path = Path(best_checkpoint_path)
+    if not best_checkpoint_path.exists():
+        raise FileNotFoundError(f"Best checkpoint was not created: {best_checkpoint_path}")
+    checkpoint = torch.load(best_checkpoint_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    return checkpoint
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default=DEFAULT_CONFIG)
@@ -407,7 +427,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--max-epochs", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
-    parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--limit-train-batches", type=int, default=None)
     parser.add_argument("--limit-eval-batches", type=int, default=None)
     parser.add_argument("--d-model", type=int, default=None)
@@ -447,6 +468,12 @@ def main() -> None:
     batch_size = args.batch_size or int(train_cfg.get("batch_size", 32))
     max_epochs = args.max_epochs or int(train_cfg.get("max_epochs") or 1)
     learning_rate = args.learning_rate or float(train_cfg.get("learning_rate") or 1e-4)
+    weight_decay = (
+        args.weight_decay
+        if args.weight_decay is not None
+        else float(train_cfg.get("weight_decay", 0.01))
+    )
+    num_workers = args.num_workers if args.num_workers is not None else int(train_cfg.get("num_workers", 0))
     dataset_dir = args.dataset_dir or data_cfg.get("dataset_dir", DEFAULT_DATASET_DIR)
     run_dir = Path(args.run_dir)
     loss_config = loss_config_from_config(config, args)
@@ -460,11 +487,11 @@ def main() -> None:
 
     model_config = build_model_config(config, args)
     model = CausalHTQTransformer(model_config).to(device)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
-    train_loader = make_loader(dataset_dir, "train", batch_size, True, args.num_workers)
-    val_loader = make_loader(dataset_dir, "val", batch_size, False, args.num_workers)
-    test_loader = make_loader(dataset_dir, "test", batch_size, False, args.num_workers)
+    train_loader = make_loader(dataset_dir, "train", batch_size, True, num_workers)
+    val_loader = make_loader(dataset_dir, "val", batch_size, False, num_workers)
+    test_loader = make_loader(dataset_dir, "test", batch_size, False, num_workers)
 
     print(f"dataset_dir: {dataset_dir}")
     print(f"run_dir: {run_dir}")
@@ -472,6 +499,8 @@ def main() -> None:
     print(f"epochs: {max_epochs}")
     print(f"batch_size: {batch_size}")
     print(f"learning_rate: {learning_rate}")
+    print(f"weight_decay: {weight_decay}")
+    print(f"num_workers: {num_workers}")
     print(
         f"loss: {loss_config['type']} normalized loss "
         f"(lambda_wind={loss_config['lambda_wind']}, "
@@ -528,6 +557,7 @@ def main() -> None:
         if monitor_name not in val_metrics:
             raise KeyError(f"Validation metric {monitor_name!r} is not available")
         monitor_value = float(val_metrics[monitor_name])
+        validate_monitor_value(monitor_name, monitor_value)
         improved = monitor_value < best_monitor - float(early_stopping["min_delta"])
         if improved:
             best_monitor = monitor_value
@@ -554,6 +584,12 @@ def main() -> None:
             print(f"early stopping at epoch {epoch:03d}: {stop_reason}")
             break
 
+    best_checkpoint_path = run_dir / "best.pt"
+    best_checkpoint = load_best_checkpoint_for_test(best_checkpoint_path, model, device)
+    print(
+        f"loaded best checkpoint for test: {best_checkpoint_path} "
+        f"(epoch={best_checkpoint['epoch']})"
+    )
     test_metrics = evaluate(
         model,
         test_loader,
@@ -579,6 +615,8 @@ def main() -> None:
         "batch_size": batch_size,
         "max_epochs": max_epochs,
         "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "num_workers": num_workers,
         "loss_config": loss_config,
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
@@ -598,6 +636,8 @@ def main() -> None:
         },
         "history": history,
         "test": test_metrics,
+        "test_checkpoint": str(best_checkpoint_path),
+        "test_checkpoint_epoch": int(best_checkpoint["epoch"]),
         "loss_space": "normalized",
         "loss_type": describe_loss_type(loss_config),
         "metric_space": "physical_m_per_s",

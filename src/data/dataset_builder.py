@@ -61,8 +61,13 @@ class SampleAccumulator:
     station_lon: list[float] = field(default_factory=list)
     target_time_start: list[str] = field(default_factory=list)
     target_times_10min: list[list[str]] = field(default_factory=list)
+    context_times_hourly: list[list[str]] = field(default_factory=list)
     height_values: list[np.ndarray] = field(default_factory=list)
+    hourly_height_values: list[np.ndarray] = field(default_factory=list)
+    target_height_values: list[np.ndarray] = field(default_factory=list)
     source_file: list[str] = field(default_factory=list)
+    hourly_source_files: list[list[str]] = field(default_factory=list)
+    target_source_files: list[list[str]] = field(default_factory=list)
     source_group: list[str] = field(default_factory=list)
 
     def __len__(self) -> int:
@@ -75,6 +80,8 @@ class StationSeries:
 
     station_id: str
     height_values: np.ndarray
+    hourly_height_values: np.ndarray
+    target_height_values: np.ndarray
     latitude: float | None = None
     longitude: float | None = None
     hourly: dict[np.datetime64, np.ndarray] = field(default_factory=dict)
@@ -147,6 +154,50 @@ def _station_ids(ds, config: PreprocessingConfig, station_count: int) -> list[st
     return [str(i) for i in range(station_count)]
 
 
+def _normalize_station_id(value) -> str:
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return str(value).strip()
+
+
+def _station_ids_for_dataset(ds, config: PreprocessingConfig, station_count: int, source) -> list[str]:
+    ids = [_normalize_station_id(v) for v in _station_ids(ds, config, station_count)]
+    duplicates = sorted({station_id for station_id in ids if ids.count(station_id) > 1})
+    if duplicates:
+        raise ValueError(f"{source} contains duplicate station_id(s): {duplicates}")
+    if any(not station_id for station_id in ids):
+        raise ValueError(f"{source} contains empty station_id values")
+    return ids
+
+
+def _matched_target_station_indices(
+    hourly_ids: list[str],
+    target_ids: list[str],
+    hourly_path: Path,
+    target_path: Path,
+    config: PreprocessingConfig,
+) -> dict[str, int]:
+    hourly_set = set(hourly_ids)
+    target_set = set(target_ids)
+    only_hourly = sorted(hourly_set - target_set)
+    only_target = sorted(target_set - hourly_set)
+    mode = config.data_alignment.station_matching_mode
+    if mode == "strict" and (only_hourly or only_target):
+        raise ValueError(
+            "Station ID mismatch between hourly and target files. "
+            f"hourly={hourly_path}; target={target_path}; "
+            f"only_hourly={only_hourly}; only_target={only_target}"
+        )
+    if only_hourly or only_target:
+        # intersection mode is intentionally noisy; no station is dropped silently.
+        print(
+            "WARNING: station intersection mode dropping unmatched stations: "
+            f"hourly={hourly_path}; target={target_path}; "
+            f"only_hourly={only_hourly}; only_target={only_target}"
+        )
+    return {station_id: idx for idx, station_id in enumerate(target_ids)}
+
+
 def _height_values_for_station(ds, config: PreprocessingConfig, station_index: int) -> np.ndarray:
     height_name = str(config.variables["height"])
     heights = np.asarray(ds[height_name].values)
@@ -155,6 +206,59 @@ def _height_values_for_station(ds, config: PreprocessingConfig, station_index: i
     if heights.ndim == 2:
         return heights[station_index].astype(float)
     raise ValueError(f"Unsupported height variable shape for {height_name}: {heights.shape}")
+
+
+def _representative_heights(hourly_actual_agl: np.ndarray, target_actual_agl: np.ndarray) -> np.ndarray:
+    return (0.5 * (hourly_actual_agl.astype(np.float32) + target_actual_agl.astype(np.float32))).astype(np.float32)
+
+
+def _validate_hourly_target_height_match(
+    station_id: str,
+    hourly_source: Path | str,
+    target_source: Path | str,
+    requested_heights: np.ndarray,
+    hourly_actual_agl: np.ndarray,
+    target_actual_agl: np.ndarray,
+    config: PreprocessingConfig,
+) -> None:
+    diff = np.abs(hourly_actual_agl.astype(float) - target_actual_agl.astype(float))
+    tolerance = float(config.data_alignment.max_hourly_target_height_diff_m)
+    if np.any(diff > tolerance):
+        raise ValueError(
+            "Hourly/target height mismatch exceeds tolerance. "
+            f"station_id={station_id}; hourly={hourly_source}; target={target_source}; "
+            f"requested_heights_agl={requested_heights.astype(float).tolist()}; "
+            f"hourly_actual_agl={hourly_actual_agl.astype(float).tolist()}; "
+            f"target_actual_agl={target_actual_agl.astype(float).tolist()}; "
+            f"diff_m={diff.tolist()}; allowed_m={tolerance}"
+        )
+
+
+def _validate_station_height_schema(
+    series: StationSeries,
+    new_height_values: np.ndarray,
+    new_hourly_height_values: np.ndarray,
+    new_target_height_values: np.ndarray,
+    station_id: str,
+    source: str,
+    config: PreprocessingConfig,
+) -> None:
+    tolerance = float(config.data_alignment.max_hourly_target_height_diff_m)
+    checks = (
+        ("representative", series.height_values, new_height_values),
+        ("hourly", series.hourly_height_values, new_hourly_height_values),
+        ("target", series.target_height_values, new_target_height_values),
+    )
+    for label, old, new in checks:
+        diff = np.abs(np.asarray(old, dtype=float) - np.asarray(new, dtype=float))
+        if np.any(diff > tolerance):
+            raise ValueError(
+                "Height schema changed across files. "
+                f"station_id={station_id}; schema={label}; source={source}; "
+                f"old_heights={np.asarray(old, dtype=float).tolist()}; "
+                f"new_heights={np.asarray(new, dtype=float).tolist()}; "
+                f"max_diff_m={float(diff.max())}; allowed_m={tolerance}"
+            )
 
 
 def _passes_sample_filters(
@@ -197,8 +301,13 @@ def _append_sample(
     station_lon: float | None,
     hour_start,
     target_times,
+    context_times,
     height_values: np.ndarray,
+    hourly_height_values: np.ndarray,
+    target_height_values: np.ndarray,
     source_file: str,
+    hourly_source_files: list[str],
+    target_source_files: list[str],
     source_group: str,
     config: PreprocessingConfig,
     x_meteo: np.ndarray | None = None,
@@ -229,8 +338,13 @@ def _append_sample(
     acc.station_lon.append(float(station_lon) if station_lon is not None else np.nan)
     acc.target_time_start.append(str(time_key(hour_start)))
     acc.target_times_10min.append(times_to_strings(target_times))
+    acc.context_times_hourly.append(times_to_strings(context_times))
     acc.height_values.append(np.asarray(height_values, dtype=np.float32))
+    acc.hourly_height_values.append(np.asarray(hourly_height_values, dtype=np.float32))
+    acc.target_height_values.append(np.asarray(target_height_values, dtype=np.float32))
     acc.source_file.append(source_file)
+    acc.hourly_source_files.append([str(v) for v in hourly_source_files])
+    acc.target_source_files.append([str(v) for v in target_source_files])
     acc.source_group.append(str(source_group))
 
 
@@ -269,25 +383,49 @@ def _build_samples_from_pair(
     hourly_values = _stack_channels(hourly_ds, config.hourly_channels, config, pair.hourly_path)
     target_values = _stack_channels(target_ds, config.target_channels, config, pair.target_path)
     station_count = hourly_values.shape[0]
-    if target_values.shape[0] != station_count:
-        raise ValueError(f"Station count mismatch for pair {pair.prefix}")
-
-    station_ids = _station_ids(hourly_ds, config, station_count)
+    hourly_station_ids = _station_ids_for_dataset(hourly_ds, config, station_count, pair.hourly_path)
+    target_station_ids = _station_ids_for_dataset(target_ds, config, target_values.shape[0], pair.target_path)
+    target_index_by_station = _matched_target_station_indices(
+        hourly_station_ids,
+        target_station_ids,
+        pair.hourly_path,
+        pair.target_path,
+        config,
+    )
     station_alt_name = config.variables.get("station_altitude")
 
-    for station_idx, station_id in enumerate(station_ids):
-        station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
-        try:
-            heights_raw = _height_values_for_station(hourly_ds, config, station_idx)
-            height_meta = select_height_indices(heights_raw, station_altitude, _height_config_for_source(config, "paris_nc"))
-        except Exception as exc:
-            warnings.append(f"Skipping station {station_id} in {pair.prefix}: {exc}")
+    for station_idx, station_id in enumerate(hourly_station_ids):
+        if station_id not in target_index_by_station:
             continue
+        target_station_idx = target_index_by_station[station_id]
+        station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
+        target_station_altitude = station_value(target_ds, station_alt_name, target_station_idx, default=station_altitude)
+        try:
+            height_config = _height_config_for_source(config, "paris_nc")
+            hourly_raw_heights = _height_values_for_station(hourly_ds, config, station_idx)
+            target_raw_heights = _height_values_for_station(target_ds, config, target_station_idx)
+            hourly_height_meta = select_height_indices(hourly_raw_heights, station_altitude, height_config)
+            target_height_meta = select_height_indices(target_raw_heights, target_station_altitude, height_config)
+            _validate_hourly_target_height_match(
+                station_id,
+                pair.hourly_path,
+                pair.target_path,
+                hourly_height_meta["selected_heights_agl"],
+                hourly_height_meta["actual_heights_agl"],
+                target_height_meta["actual_heights_agl"],
+                config,
+            )
+        except Exception as exc:
+            raise ValueError(f"Station {station_id} in {pair.prefix} failed height alignment: {exc}") from exc
 
-        hidx = height_meta["height_indices"]
-        actual_agl = height_meta["actual_heights_agl"]
-        station_hourly = np.take(hourly_values[station_idx], hidx, axis=1)
-        station_target = np.take(target_values[station_idx], hidx, axis=1)
+        hourly_hidx = hourly_height_meta["height_indices"]
+        target_hidx = target_height_meta["height_indices"]
+        actual_agl = _representative_heights(
+            hourly_height_meta["actual_heights_agl"],
+            target_height_meta["actual_heights_agl"],
+        )
+        station_hourly = np.take(hourly_values[station_idx], hourly_hidx, axis=1)
+        station_target = np.take(target_values[target_station_idx], target_hidx, axis=1)
 
         for hour_start in hourly_times:
             ok, errors = validate_sample_alignment(hour_start, hourly_times, target_times, spec)
@@ -318,8 +456,13 @@ def _build_samples_from_pair(
                 None,
                 hour_start,
                 wanted_target_times,
+                context_times,
                 actual_agl,
+                hourly_height_meta["actual_heights_agl"],
+                target_height_meta["actual_heights_agl"],
                 f"{pair.hourly_path.name}|{pair.target_path.name}",
+                [pair.hourly_path.name for _ in context_times],
+                [pair.target_path.name for _ in wanted_target_times],
                 "paris_nc",
                 config,
             )
@@ -361,45 +504,74 @@ def _load_pair_into_station_series(
     hourly_values = _stack_channels(hourly_ds, config.hourly_channels, config, pair.hourly_path)
     target_values = _stack_channels(target_ds, config.target_channels, config, pair.target_path)
     station_count = hourly_values.shape[0]
-    if target_values.shape[0] != station_count:
-        raise ValueError(f"Station count mismatch for pair {pair.prefix}")
-
-    station_ids = _station_ids(hourly_ds, config, station_count)
+    hourly_station_ids = _station_ids_for_dataset(hourly_ds, config, station_count, pair.hourly_path)
+    target_station_ids = _station_ids_for_dataset(target_ds, config, target_values.shape[0], pair.target_path)
+    target_index_by_station = _matched_target_station_indices(
+        hourly_station_ids,
+        target_station_ids,
+        pair.hourly_path,
+        pair.target_path,
+        config,
+    )
     station_alt_name = config.variables.get("station_altitude")
     station_lat_name = config.variables.get("station_lat")
     station_lon_name = config.variables.get("station_lon")
     source = f"{pair.hourly_path.name}|{pair.target_path.name}"
 
-    for station_idx, station_id in enumerate(station_ids):
+    for station_idx, station_id in enumerate(hourly_station_ids):
+        if station_id not in target_index_by_station:
+            continue
+        target_station_idx = target_index_by_station[station_id]
         station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
+        target_station_altitude = station_value(target_ds, station_alt_name, target_station_idx, default=station_altitude)
         station_lat = station_value(hourly_ds, station_lat_name, station_idx, default=np.nan)
         station_lon = station_value(hourly_ds, station_lon_name, station_idx, default=np.nan)
         try:
-            heights_raw = _height_values_for_station(hourly_ds, config, station_idx)
-            height_meta = select_height_indices(heights_raw, station_altitude, _height_config_for_source(config, "paris_nc"))
+            height_config = _height_config_for_source(config, "paris_nc")
+            hourly_raw_heights = _height_values_for_station(hourly_ds, config, station_idx)
+            target_raw_heights = _height_values_for_station(target_ds, config, target_station_idx)
+            hourly_height_meta = select_height_indices(hourly_raw_heights, station_altitude, height_config)
+            target_height_meta = select_height_indices(target_raw_heights, target_station_altitude, height_config)
+            _validate_hourly_target_height_match(
+                station_id,
+                pair.hourly_path,
+                pair.target_path,
+                hourly_height_meta["selected_heights_agl"],
+                hourly_height_meta["actual_heights_agl"],
+                target_height_meta["actual_heights_agl"],
+                config,
+            )
         except Exception as exc:
-            warnings.append(f"Skipping station {station_id} in {pair.prefix}: {exc}")
-            continue
+            raise ValueError(f"Station {station_id} in {pair.prefix} failed height alignment: {exc}") from exc
 
-        hidx = height_meta["height_indices"]
-        actual_agl = height_meta["actual_heights_agl"].astype(np.float32)
-        station_hourly = np.take(hourly_values[station_idx], hidx, axis=1)
-        station_target = np.take(target_values[station_idx], hidx, axis=1)
+        hourly_hidx = hourly_height_meta["height_indices"]
+        target_hidx = target_height_meta["height_indices"]
+        hourly_actual_agl = hourly_height_meta["actual_heights_agl"].astype(np.float32)
+        target_actual_agl = target_height_meta["actual_heights_agl"].astype(np.float32)
+        actual_agl = _representative_heights(hourly_actual_agl, target_actual_agl)
+        station_hourly = np.take(hourly_values[station_idx], hourly_hidx, axis=1)
+        station_target = np.take(target_values[target_station_idx], target_hidx, axis=1)
 
         if station_id not in series_by_station:
             series_by_station[station_id] = StationSeries(
                 station_id,
                 actual_agl,
+                hourly_actual_agl,
+                target_actual_agl,
                 float(station_lat) if np.isfinite(station_lat) else None,
                 float(station_lon) if np.isfinite(station_lon) else None,
                 source_group="paris_nc",
             )
         series = series_by_station[station_id]
-        if not np.allclose(series.height_values, actual_agl):
-            warnings.append(
-                f"Station {station_id} height values changed in {pair.prefix}; "
-                "keeping station-specific values from first occurrence."
-            )
+        _validate_station_height_schema(
+            series,
+            actual_agl,
+            hourly_actual_agl,
+            target_actual_agl,
+            station_id,
+            source,
+            config,
+        )
 
         for idx, timestamp in enumerate(hourly_times):
             key = time_key(timestamp)
@@ -505,24 +677,43 @@ def _load_standard_csv_source(
             warnings.append(f"Standard source {source_name} station {station_id} missing hourly or target records.")
             continue
 
-        raw_heights = np.asarray(sorted(station_hourly_raw["height"].dropna().unique()), dtype=float)
-        if raw_heights.size == 0:
+        hourly_raw_heights = np.asarray(sorted(station_hourly_raw["height"].dropna().unique()), dtype=float)
+        target_raw_heights = np.asarray(sorted(station_target_raw["height"].dropna().unique()), dtype=float)
+        if hourly_raw_heights.size == 0:
             warnings.append(f"Standard source {source_name} station {station_id} has no valid heights.")
             continue
-        indices = np.asarray([int(np.argmin(np.abs(raw_heights - h))) for h in selected], dtype=np.int64)
-        actual = raw_heights[indices].astype(np.float32)
-        diff = np.abs(actual.astype(float) - selected)
-        if np.any(diff > height_config.max_height_diff):
-            warnings.append(
-                f"Skipping standard source {source_name} station {station_id}: "
-                f"height diff max={diff.max():.6g} exceeds {height_config.max_height_diff}."
-            )
+        if target_raw_heights.size == 0:
+            warnings.append(f"Standard source {source_name} station {station_id} has no valid target heights.")
             continue
-        if len(np.unique(indices)) != len(indices):
-            warnings.append(
+        hourly_indices = np.asarray([int(np.argmin(np.abs(hourly_raw_heights - h))) for h in selected], dtype=np.int64)
+        target_indices = np.asarray([int(np.argmin(np.abs(target_raw_heights - h))) for h in selected], dtype=np.int64)
+        hourly_actual = hourly_raw_heights[hourly_indices].astype(np.float32)
+        target_actual = target_raw_heights[target_indices].astype(np.float32)
+        diff = np.abs(hourly_actual.astype(float) - selected)
+        target_diff = np.abs(target_actual.astype(float) - selected)
+        if np.any(diff > height_config.max_height_diff) or np.any(target_diff > height_config.max_height_diff):
+            raise ValueError(
+                f"Skipping standard source {source_name} station {station_id}: "
+                f"height diff max={max(float(diff.max()), float(target_diff.max())):.6g} exceeds "
+                f"{height_config.max_height_diff}."
+            )
+        if len(np.unique(hourly_indices)) != len(hourly_indices) or len(np.unique(target_indices)) != len(target_indices):
+            raise ValueError(
                 f"Skipping standard source {source_name} station {station_id}: selected heights map to duplicate raw layers."
             )
-            continue
+        try:
+            _validate_hourly_target_height_match(
+                station_id,
+                hourly_path,
+                target_path,
+                selected.astype(np.float32),
+                hourly_actual,
+                target_actual,
+                config,
+            )
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        actual = _representative_heights(hourly_actual, target_actual)
 
         lat = float(station_hourly_raw["latitude"].median())
         lon = float(station_hourly_raw["longitude"].median())
@@ -530,23 +721,32 @@ def _load_standard_csv_source(
             series_by_station[station_id] = StationSeries(
                 station_id=station_id,
                 height_values=actual,
+                hourly_height_values=hourly_actual,
+                target_height_values=target_actual,
                 latitude=lat if np.isfinite(lat) else None,
                 longitude=lon if np.isfinite(lon) else None,
                 source_group=source_label,
             )
         series = series_by_station[station_id]
-        if not np.allclose(series.height_values, actual):
-            warnings.append(f"Station {station_id} height values differ across sources; keeping first source values.")
+        _validate_station_height_schema(
+            series,
+            actual,
+            hourly_actual,
+            target_actual,
+            station_id,
+            f"{hourly_path}|{target_path}",
+            config,
+        )
 
-        def add_records(frame, target_dict, source_dict, expected_step: str) -> None:
-            subset = frame[frame["height"].isin(actual.astype(float))].copy()
+        def add_records(frame, selected_actual, target_dict, source_dict, expected_step: str) -> None:
+            subset = frame[frame["height"].isin(selected_actual.astype(float))].copy()
             for time_start, time_group in subset.groupby("time_start", sort=True):
                 if pd.isna(time_start):
                     continue
                 by_height = time_group.drop_duplicates("height", keep="first").set_index("height")
-                values = np.full((len(actual), 2), config.quality.missing_value, dtype=np.float32)
-                masks = np.zeros((len(actual), 2), dtype=bool)
-                for h_i, height in enumerate(actual.astype(float)):
+                values = np.full((len(selected_actual), 2), config.quality.missing_value, dtype=np.float32)
+                masks = np.zeros((len(selected_actual), 2), dtype=bool)
+                for h_i, height in enumerate(selected_actual.astype(float)):
                     if height not in by_height.index:
                         continue
                     row = by_height.loc[height]
@@ -566,8 +766,8 @@ def _load_standard_csv_source(
                 source_files = sorted(set(str(v) for v in time_group["source_file"].dropna().unique()))
                 source_dict[key] = f"{source_name}:{';'.join(source_files)}"
 
-        add_records(station_hourly_raw, series.hourly, series.hourly_source, "hourly")
-        add_records(station_target_raw, series.target, series.target_source, "10min")
+        add_records(station_hourly_raw, hourly_actual, series.hourly, series.hourly_source, "hourly")
+        add_records(station_target_raw, target_actual, series.target, series.target_source, "10min")
 
     return warnings
 
@@ -632,6 +832,8 @@ def _build_samples_from_global_series(
                     *(series.target_source[t] for t in target_times),
                 }
             )
+            hourly_source_files = [series.hourly_source[t] for t in context_times]
+            target_source_files = [series.target_source[t] for t in target_times]
             _append_sample(
                 acc,
                 x,
@@ -643,8 +845,13 @@ def _build_samples_from_global_series(
                 series.longitude,
                 hour_start,
                 target_times,
+                context_times,
                 series.height_values,
+                series.hourly_height_values,
+                series.target_height_values,
                 ";".join(source_files),
+                hourly_source_files,
+                target_source_files,
                 series.source_group,
                 config,
                 x_meteo=x_meteo,
@@ -692,8 +899,13 @@ def _empty_arrays(config: PreprocessingConfig) -> dict[str, np.ndarray]:
         "station_lon": np.empty((0,), dtype=np.float32),
         "target_time_start": np.empty((0,), dtype=object),
         "target_times_10min": np.empty((0, t_out), dtype=object),
+        "context_times_hourly": np.empty((0, l), dtype=object),
         "height_values": np.empty((0, h), dtype=np.float32),
+        "hourly_height_values": np.empty((0, h), dtype=np.float32),
+        "target_height_values": np.empty((0, h), dtype=np.float32),
         "source_file": np.empty((0,), dtype=object),
+        "hourly_source_files": np.empty((0, l), dtype=object),
+        "target_source_files": np.empty((0, t_out), dtype=object),
         "source_group": np.empty((0,), dtype=object),
         "split": np.empty((0,), dtype=object),
     }
@@ -785,8 +997,13 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
         "station_lon": np.asarray(acc.station_lon, dtype=np.float32),
         "target_time_start": np.asarray(acc.target_time_start, dtype=object),
         "target_times_10min": np.asarray(acc.target_times_10min, dtype=object),
+        "context_times_hourly": np.asarray(acc.context_times_hourly, dtype=object),
         "height_values": np.stack(acc.height_values).astype(np.float32),
+        "hourly_height_values": np.stack(acc.hourly_height_values).astype(np.float32),
+        "target_height_values": np.stack(acc.target_height_values).astype(np.float32),
         "source_file": np.asarray(acc.source_file, dtype=object),
+        "hourly_source_files": np.asarray(acc.hourly_source_files, dtype=object),
+        "target_source_files": np.asarray(acc.target_source_files, dtype=object),
         "source_group": np.asarray(acc.source_group, dtype=object),
         "split": split,
     }
@@ -800,12 +1017,78 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
     return arrays
 
 
+def _validate_arrays_before_write(arrays: dict[str, np.ndarray], config: PreprocessingConfig) -> None:
+    """Validate global dataset invariants before writing dataset.npz."""
+
+    n = int(arrays["x_hourly"].shape[0])
+    for key, value in arrays.items():
+        if key in {"meteo_pressure_levels", "meteo_channel_names", "static_feature_names"}:
+            continue
+        if value.shape and int(value.shape[0]) != n:
+            raise ValueError(f"Dataset field {key!r} has first dimension {value.shape[0]}, expected {n}")
+
+    expected_x = (n, config.context_hours, len(config.height.selected_heights_agl), len(config.hourly_channels))
+    expected_y = (n, config.target_steps_per_hour, len(config.height.selected_heights_agl), len(config.target_channels))
+    if arrays["x_hourly"].shape != expected_x:
+        raise ValueError(f"x_hourly shape {arrays['x_hourly'].shape} does not match expected {expected_x}")
+    if arrays["y_10min"].shape != expected_y:
+        raise ValueError(f"y_10min shape {arrays['y_10min'].shape} does not match expected {expected_y}")
+
+    h_shape = (n, len(config.height.selected_heights_agl))
+    for key in ("height_values", "hourly_height_values", "target_height_values"):
+        if arrays[key].shape != h_shape:
+            raise ValueError(f"{key} shape {arrays[key].shape} does not match expected {h_shape}")
+        if not np.all(np.diff(arrays[key], axis=1) > 0):
+            raise ValueError(f"{key} must be strictly increasing for every sample")
+
+    height_diff = np.abs(arrays["hourly_height_values"].astype(float) - arrays["target_height_values"].astype(float))
+    tolerance = float(config.data_alignment.max_hourly_target_height_diff_m)
+    if height_diff.size and np.nanmax(height_diff) > tolerance:
+        raise ValueError(
+            f"hourly_height_values and target_height_values differ by more than {tolerance} m; "
+            f"max_diff={float(np.nanmax(height_diff))}"
+        )
+
+    for value_key, mask_key in (("x_hourly", "x_mask"), ("y_10min", "y_mask")):
+        values = arrays[value_key]
+        mask = arrays[mask_key].astype(bool)
+        if not np.isfinite(values[mask]).all():
+            raise ValueError(f"{value_key} contains NaN/Inf at valid mask positions")
+
+    station_ids = [str(v).strip() for v in arrays["station_id"]]
+    if any(not station_id for station_id in station_ids):
+        raise ValueError("station_id contains empty values")
+    sample_keys = list(zip(station_ids, [str(v) for v in arrays["target_time_start"]]))
+    if len(sample_keys) != len(set(sample_keys)):
+        raise ValueError("Duplicate station_id + target_time_start samples detected")
+
+    spec = AlignmentSpec(
+        context_hours=config.context_hours,
+        target_steps=config.target_steps_per_hour,
+        target_step_minutes=config.target_frequency_seconds // 60,
+        input_step_minutes=config.input_frequency_seconds // 60,
+    )
+    for idx in range(n):
+        start = np.datetime64(arrays["target_time_start"][idx], "m")
+        context = [np.datetime64(t, "m") for t in arrays["context_times_hourly"][idx]]
+        targets = [np.datetime64(t, "m") for t in arrays["target_times_10min"][idx]]
+        if [time_key(t) for t in context] != [time_key(t) for t in context_times_for_hour(start, spec)]:
+            raise ValueError(f"context_times_hourly mismatch at sample {idx}")
+        if [time_key(t) for t in targets] != [time_key(t) for t in target_times_for_hour(start, spec)]:
+            raise ValueError(f"target_times_10min mismatch at sample {idx}")
+        if targets and not all(start <= t < start + np.timedelta64(1, "h") for t in targets):
+            raise ValueError(f"target_times_10min outside target hour at sample {idx}")
+        if not np.allclose(arrays["current_hourly"][idx], arrays["x_hourly"][idx, -1], equal_nan=True):
+            raise ValueError(f"current_hourly does not match x_hourly[-1] at sample {idx}")
+
+
 def _write_dataset(
     arrays: dict[str, np.ndarray],
     pairs: list[RawFilePair],
     config: PreprocessingConfig,
     warnings: list[str],
 ) -> None:
+    _validate_arrays_before_write(arrays, config)
     config.dataset_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(config.dataset_dir / "dataset.npz", **arrays)
 
@@ -824,6 +1107,14 @@ def _write_dataset(
         "timestamp_semantics": config.timestamp_semantics,
         "context_alignment": config.context_alignment,
         "target_offsets_minutes": list(config.target_offsets_minutes),
+        "raw_timestamp_semantics": config.raw_timestamp_semantics,
+        "data_alignment": {
+            "station_matching_mode": config.data_alignment.station_matching_mode,
+            "max_hourly_target_height_diff_m": config.data_alignment.max_hourly_target_height_diff_m,
+            "height_schema_policy": config.data_alignment.height_schema_policy,
+            "height_values_definition": "0.5 * (hourly_height_values + target_height_values)",
+            "source_file_definition": "summary set of hourly and target source files for the sample",
+        },
         "split_policy": {
             "split_time_key": config.splits.split_time_key,
             "train_ratio": config.splits.train_ratio,
@@ -910,7 +1201,7 @@ def build_dataset(config: PreprocessingConfig, dry_run: bool = False) -> BuildSu
             try:
                 warnings.extend(_load_pair_into_station_series(pair, config, series_by_station))
             except Exception as exc:
-                warnings.append(f"Skipping raw pair {pair.prefix}: {exc}")
+                raise RuntimeError(f"Failed to load raw pair {pair.prefix}: {exc}") from exc
 
     standard_sources = dict(source_cfg.get("standard_csv", {}))
     for source_name, standard_cfg in standard_sources.items():
@@ -920,7 +1211,7 @@ def build_dataset(config: PreprocessingConfig, dry_run: bool = False) -> BuildSu
         try:
             warnings.extend(_load_standard_csv_source(source_name, standard_cfg, config, series_by_station))
         except Exception as exc:
-            warnings.append(f"Skipping standard CSV source {source_name}: {exc}")
+            raise RuntimeError(f"Failed to load standard CSV source {source_name}: {exc}") from exc
 
     if not series_by_station:
         warnings.append("No station series were loaded from enabled sources; writing empty dataset.")

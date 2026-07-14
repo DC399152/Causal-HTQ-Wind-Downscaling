@@ -89,6 +89,9 @@ def check_alignment(dataset_dir: str | Path, num_examples: int = 5, seed: int = 
             print(f"meteo pressure levels: {ds['meteo_pressure_levels'].tolist()}")
         if "meteo_channel_names" in ds:
             print(f"meteo channel names: {[str(v) for v in ds['meteo_channel_names']]}")
+    for key in ("context_times_hourly", "hourly_height_values", "target_height_values", "hourly_source_files", "target_source_files"):
+        if key in ds:
+            print(f"{key} shape: {ds[key].shape}")
 
     if n == 0:
         print("WARNING: dataset contains no samples; alignment checks are structurally complete only.")
@@ -150,11 +153,17 @@ def check_alignment(dataset_dir: str | Path, num_examples: int = 5, seed: int = 
         print(f"    target_time_start: {ds['target_time_start'][idx]}")
         context_times = _expected_context_times(str(ds["target_time_start"][idx]), context_hours=x.shape[1])
         print(f"    wind_context_times: {context_times}")
+        if "context_times_hourly" in ds:
+            print(f"    stored_context_times_hourly: {[str(t) for t in ds['context_times_hourly'][idx]]}")
         if has_meteo:
             print(f"    meteo_context_times: {context_times}")
             print(f"    x_meteo shape: {ds['x_meteo'][idx].shape}")
         print(f"    target_times_10min: {[str(t) for t in ds['target_times_10min'][idx]]}")
         print(f"    height_values: {ds['height_values'][idx].tolist()}")
+        if "hourly_height_values" in ds:
+            print(f"    hourly_height_values: {ds['hourly_height_values'][idx].tolist()}")
+        if "target_height_values" in ds:
+            print(f"    target_height_values: {ds['target_height_values'][idx].tolist()}")
         if has_meteo and "meteo_pressure_levels" in ds:
             print(f"    meteo_pressure_levels: {ds['meteo_pressure_levels'].tolist()}")
         print(f"    split: {ds['split'][idx]}")

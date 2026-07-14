@@ -18,6 +18,11 @@ time:
   context_alignment: causal_last
   target_offsets_minutes: [0, 10, 20, 30, 40, 50]
 
+data_alignment:
+  station_matching_mode: strict
+  max_hourly_target_height_diff_m: 2.0
+  height_schema_policy: error
+
 sources:
   # Toggle this for paris-only ablations.
   paris_nc:

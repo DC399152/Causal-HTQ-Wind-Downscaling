@@ -107,6 +107,8 @@ class WindDownscalingDataset:
     - ``y_mask``: [T_out, H, C]
     - ``current_hourly``: [H, C]
     - ``height``: [H], height values used by this sample
+    - optional ``hourly_height_values``: [H], actual hourly heights
+    - optional ``target_height_values``: [H], actual target heights
     - optional ``current_hourly_y_norm``: [H, C], only when ``normalize=True``
     - optional ``x_meteo``: [L, P, C_m]
     - optional ``meteo_mask``: [L, P, C_m]
@@ -272,6 +274,28 @@ class WindDownscalingDataset:
                 metadata["station_lat"] = float(data["station_lat"][sample_index])
             if "station_lon" in data:
                 metadata["station_lon"] = float(data["station_lon"][sample_index])
+            if "context_times_hourly" in data:
+                metadata["context_times_hourly"] = [
+                    str(v) for v in data["context_times_hourly"][sample_index]
+                ]
+            if "hourly_height_values" in data:
+                metadata["hourly_height_values"] = _as_tensor(
+                    data["hourly_height_values"][sample_index],
+                    dtype=require_torch().float32,
+                )
+            if "target_height_values" in data:
+                metadata["target_height_values"] = _as_tensor(
+                    data["target_height_values"][sample_index],
+                    dtype=require_torch().float32,
+                )
+            if "hourly_source_files" in data:
+                metadata["hourly_source_files"] = [
+                    str(v) for v in data["hourly_source_files"][sample_index]
+                ]
+            if "target_source_files" in data:
+                metadata["target_source_files"] = [
+                    str(v) for v in data["target_source_files"][sample_index]
+                ]
             if has_meteo and "meteo_pressure_levels" in data:
                 metadata["meteo_pressure_levels"] = _as_tensor(
                     data["meteo_pressure_levels"],
