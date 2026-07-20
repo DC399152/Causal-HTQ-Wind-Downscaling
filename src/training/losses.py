@@ -7,6 +7,7 @@ import warnings
 
 
 _WARNED_EXTREME_NORMALIZED_SPACE = False
+_WARNED_RESIDUAL_WEIGHT_NORMALIZED_SPACE = False
 
 
 def _mask_denominator(mask, eps: float = 1e-8):
@@ -138,6 +139,34 @@ def second_order_temporal_roughness_loss(pred, target, mask, eps: float = 1e-8):
     return masked_l1_loss(pred_second, target_second, second_mask, eps=eps)
 
 
+def _magnitude_weight(vector, alpha: float, gamma: float, q_ref: float, max_weight: float, eps: float):
+    mag = (vector[..., :2].pow(2).sum(dim=-1, keepdim=True) + eps).sqrt()
+    q_ref_tensor = vector.new_tensor(float(q_ref)).abs().clamp_min(eps)
+    weight = 1.0 + float(alpha) * (mag / q_ref_tensor).pow(float(gamma))
+    return weight.clamp(max=float(max_weight)).detach()
+
+
+def temporal_weighted_loss(residual_pred, true_residual, mask, weight, eps: float = 1e-8):
+    dy_pred = residual_pred[:, 1:] - residual_pred[:, :-1]
+    dy_true = true_residual[:, 1:] - true_residual[:, :-1]
+    dy_mask = mask[:, 1:] & mask[:, :-1]
+    return masked_weighted_l1_loss(dy_pred, dy_true, dy_mask, weight, eps=eps)
+
+
+def residual_amplitude_loss(residual_pred, true_residual, mask, eps: float = 1e-8, amplitude_eps: float = 1e-4):
+    valid = mask.to(dtype=residual_pred.dtype)
+    count = valid.sum(dim=1)
+    pred_mean = (residual_pred * valid).sum(dim=1) / count.clamp_min(eps)
+    true_mean = (true_residual * valid).sum(dim=1) / count.clamp_min(eps)
+    pred_var = ((residual_pred - pred_mean.unsqueeze(1)).pow(2) * valid).sum(dim=1) / count.clamp_min(eps)
+    true_var = ((true_residual - true_mean.unsqueeze(1)).pow(2) * valid).sum(dim=1) / count.clamp_min(eps)
+    amp_mask = count >= 2
+    amp_eps = residual_pred.new_tensor(float(amplitude_eps)).abs().clamp_min(eps)
+    pred_std = (pred_var.clamp_min(0.0) + amp_eps).sqrt()
+    true_std = (true_var.clamp_min(0.0) + amp_eps).sqrt()
+    return masked_l1_loss(pred_std, true_std, amp_mask, eps=eps)
+
+
 def residual_physics_loss(
     pred_wind,
     residual_pred,
@@ -148,14 +177,26 @@ def residual_physics_loss(
     *,
     lambda_wind: float = 1.0,
     lambda_extreme: float = 0.3,
+    lambda_residual_weighted: float = 0.0,
     lambda_temporal: float = 0.2,
+    lambda_temporal_weighted: float = 0.0,
     lambda_roughness: float = 0.1,
+    lambda_amplitude: float = 0.0,
     lambda_vertical: float = 0.05,
     lambda_consistency: float = 0.1,
     extreme_beta: float = 1.0,
     extreme_threshold: float = 10.0,
     extreme_scale: float = 2.0,
     extreme_max_weight: float = 5.0,
+    residual_weight_alpha: float = 1.0,
+    residual_weight_gamma: float = 1.0,
+    residual_weight_q_ref: float = 1.0,
+    residual_weight_max: float = 5.0,
+    temporal_weight_alpha: float = 1.0,
+    temporal_weight_gamma: float = 1.0,
+    temporal_weight_q_ref: float = 1.0,
+    temporal_weight_max: float = 5.0,
+    amplitude_eps: float = 1e-4,
     y_mean=None,
     y_std=None,
     eps: float = 1e-8,
@@ -183,9 +224,12 @@ def residual_physics_loss(
 
     wind = masked_l1_loss(pred_wind, target, mask, eps=eps)
 
+    y_std_tensor = None
+    if y_std is not None:
+        y_std_tensor = pred_wind.new_tensor(y_std).reshape(1, 1, 1, -1)
+
     if y_mean is not None and y_std is not None:
         y_mean_tensor = pred_wind.new_tensor(y_mean).reshape(1, 1, 1, -1)
-        y_std_tensor = pred_wind.new_tensor(y_std).reshape(1, 1, 1, -1)
         target_for_speed = target * y_std_tensor + y_mean_tensor
     else:
         global _WARNED_EXTREME_NORMALIZED_SPACE
@@ -211,8 +255,55 @@ def residual_physics_loss(
     weight = weight.clamp(max=float(extreme_max_weight)).detach()
     extreme = masked_weighted_l1_loss(pred_wind, target, mask, weight, eps=eps)
 
+    if y_std_tensor is not None:
+        true_residual_for_weight = true_residual * y_std_tensor
+    else:
+        global _WARNED_RESIDUAL_WEIGHT_NORMALIZED_SPACE
+        if not _WARNED_RESIDUAL_WEIGHT_NORMALIZED_SPACE:
+            warnings.warn(
+                "residual_physics_loss received no y_std; residual and temporal "
+                "weights will be computed in normalized space, so q_ref is not in m/s.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            _WARNED_RESIDUAL_WEIGHT_NORMALIZED_SPACE = True
+        true_residual_for_weight = true_residual
+
+    residual_weight = _magnitude_weight(
+        true_residual_for_weight,
+        residual_weight_alpha,
+        residual_weight_gamma,
+        residual_weight_q_ref,
+        residual_weight_max,
+        eps,
+    )
+    residual_weighted = masked_weighted_l1_loss(
+        residual_pred,
+        true_residual,
+        mask,
+        residual_weight,
+        eps=eps,
+    )
     temporal = temporal_gradient_loss(residual_pred, true_residual, mask, eps=eps)
+    dy_true = true_residual[:, 1:] - true_residual[:, :-1]
+    dy_true_for_weight = true_residual_for_weight[:, 1:] - true_residual_for_weight[:, :-1]
+    temporal_weight = _magnitude_weight(
+        dy_true_for_weight,
+        temporal_weight_alpha,
+        temporal_weight_gamma,
+        temporal_weight_q_ref,
+        temporal_weight_max,
+        eps,
+    )
+    temporal_weighted = temporal_weighted_loss(
+        residual_pred,
+        true_residual,
+        mask,
+        temporal_weight,
+        eps=eps,
+    )
     roughness = second_order_temporal_roughness_loss(residual_pred, true_residual, mask, eps=eps)
+    amplitude = residual_amplitude_loss(residual_pred, true_residual, mask, eps=eps, amplitude_eps=amplitude_eps)
 
     if float(lambda_vertical) == 0.0:
         vertical = _zero_loss_like(pred_wind)
@@ -235,8 +326,11 @@ def residual_physics_loss(
     total = (
         lambda_wind * wind
         + lambda_extreme * extreme
+        + lambda_residual_weighted * residual_weighted
         + lambda_temporal * temporal
+        + lambda_temporal_weighted * temporal_weighted
         + lambda_roughness * roughness
+        + lambda_amplitude * amplitude
         + lambda_vertical * vertical
         + lambda_consistency * consistency
     )
@@ -251,10 +345,25 @@ def residual_physics_loss(
         "loss": total,
         "wind": wind,
         "extreme": extreme,
+        "residual_weighted": residual_weighted,
         "temporal": temporal,
+        "temporal_weighted": temporal_weighted,
         "roughness": roughness,
+        "amplitude": amplitude,
         "vertical": vertical,
         "consistency": consistency,
         "mean_extreme_weight": mean_extreme_weight,
         "max_extreme_weight": max_extreme_weight,
+        "mean_residual_weight": residual_weight.expand_as(mask).masked_select(mask).mean()
+        if mask.any()
+        else _zero_loss_like(pred_wind),
+        "max_residual_weight": residual_weight.expand_as(mask).masked_select(mask).max()
+        if mask.any()
+        else _zero_loss_like(pred_wind),
+        "mean_temporal_weight": temporal_weight.expand_as(mask[:, 1:]).masked_select(mask[:, 1:] & mask[:, :-1]).mean()
+        if (mask[:, 1:] & mask[:, :-1]).any()
+        else _zero_loss_like(pred_wind),
+        "max_temporal_weight": temporal_weight.expand_as(mask[:, 1:]).masked_select(mask[:, 1:] & mask[:, :-1]).max()
+        if (mask[:, 1:] & mask[:, :-1]).any()
+        else _zero_loss_like(pred_wind),
     }

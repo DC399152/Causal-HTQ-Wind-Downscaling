@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -29,8 +30,6 @@ from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_to
 from src.models.baselines import repeat_current_hour
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
 from src.training.utils import get_device, x_denormalize, y_denormalize
-from src.visualization.plot_samples import plot_sample_timeseries
-from src.visualization.plot_training_curves import plot_training_curves
 
 
 def load_checkpoint(path: str | Path, device):
@@ -111,8 +110,11 @@ def main() -> None:
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
             "lambda_extreme": float(loss_config["lambda_extreme"]),
+            "lambda_residual_weighted": float(loss_config["lambda_residual_weighted"]),
             "lambda_temporal": float(loss_config["lambda_temporal"]),
+            "lambda_temporal_weighted": float(loss_config["lambda_temporal_weighted"]),
             "lambda_roughness": float(loss_config["lambda_roughness"]),
+            "lambda_amplitude": float(loss_config["lambda_amplitude"]),
             "lambda_vertical": float(loss_config["lambda_vertical"]),
             "lambda_consistency": float(loss_config["lambda_consistency"]),
         },
@@ -129,8 +131,11 @@ def main() -> None:
         f"loss: {loss_config['type']} normalized loss "
         f"(lambda_wind={loss_config['lambda_wind']}, "
         f"lambda_extreme={loss_config['lambda_extreme']}, "
+        f"lambda_residual_weighted={loss_config['lambda_residual_weighted']}, "
         f"lambda_temporal={loss_config['lambda_temporal']}, "
+        f"lambda_temporal_weighted={loss_config['lambda_temporal_weighted']}, "
         f"lambda_roughness={loss_config['lambda_roughness']}, "
+        f"lambda_amplitude={loss_config['lambda_amplitude']}, "
         f"lambda_vertical={loss_config['lambda_vertical']})"
     )
     print("metrics: denormalized physical m/s")
@@ -180,15 +185,18 @@ def main() -> None:
 
     if args.make_plots:
         figures_dir = Path(args.figures_dir) if args.figures_dir else output_path.parent / "figures"
-        written = make_plots(
-            args=args,
-            model=model,
-            norm_stats=norm_stats,
-            device=device,
-            figures_dir=figures_dir,
-        )
-        for path in written:
-            print(f"wrote: {path}")
+        try:
+            written = make_plots(
+                args=args,
+                model=model,
+                norm_stats=norm_stats,
+                device=device,
+                figures_dir=figures_dir,
+            )
+            for path in written:
+                print(f"wrote: {path}")
+        except Exception as exc:
+            print(f"warning: plot generation failed: {exc}")
 
 
 def make_plots(
@@ -200,6 +208,11 @@ def make_plots(
     figures_dir: Path,
 ) -> list[Path]:
     """Generate training curves and representative sample plots."""
+
+    # Windows/conda can load both libomp and libiomp5md when torch and
+    # matplotlib/numpy meet. Keep metrics usable and allow plotting to proceed.
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    from src.visualization.plot_training_curves import plot_training_curves
 
     written: list[Path] = []
     metrics_path = Path(args.checkpoint).resolve().parent / "metrics.json"
@@ -389,6 +402,8 @@ def plot_one_sample(
         f"{label}, {split} local_index={local_index}, sample_index={item['sample_index']}, "
         f"station={item.get('station_id', 'unknown')}, T={item.get('target_time_start', 'unknown')}"
     )
+    from src.visualization.plot_samples import plot_sample_timeseries
+
     plot_sample_timeseries(
         target=target_ms,
         pred=pred_ms,

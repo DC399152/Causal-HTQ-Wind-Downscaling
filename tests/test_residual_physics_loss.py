@@ -3,6 +3,7 @@ import torch
 from scripts.train import default_loss_config, compute_loss_parts
 from src.training.losses import (
     masked_mse_loss,
+    residual_amplitude_loss,
     residual_physics_loss,
     vertical_shear_loss,
 )
@@ -34,12 +35,19 @@ def test_residual_physics_loss_forward_and_keys():
         "loss",
         "wind",
         "extreme",
+        "residual_weighted",
         "temporal",
+        "temporal_weighted",
         "roughness",
+        "amplitude",
         "vertical",
         "consistency",
         "mean_extreme_weight",
         "max_extreme_weight",
+        "mean_residual_weight",
+        "max_residual_weight",
+        "mean_temporal_weight",
+        "max_temporal_weight",
     }
     assert expected <= set(parts)
     for key in expected:
@@ -132,6 +140,82 @@ def test_residual_physics_extreme_weight_range_uses_physical_speed():
 
     assert parts["mean_extreme_weight"] >= 1.0
     assert parts["max_extreme_weight"] <= max_weight
+
+
+def test_residual_physics_supports_residual_and_temporal_weighted_terms():
+    pred = torch.zeros(1, 6, 2, 2)
+    residual = torch.zeros_like(pred)
+    current = torch.zeros(1, 2, 2)
+    true_residual = torch.zeros_like(pred)
+    true_residual[:, 3, :, :] = 2.0
+    target = current.unsqueeze(1) + true_residual
+    mask = torch.ones_like(target, dtype=torch.bool)
+    height = torch.tensor([[250.0, 275.0]])
+
+    parts = residual_physics_loss(
+        pred,
+        residual,
+        target,
+        mask,
+        current,
+        height,
+        lambda_extreme=0.0,
+        lambda_residual_weighted=0.5,
+        lambda_temporal_weighted=0.5,
+        lambda_amplitude=0.05,
+        residual_weight_q_ref=1.0,
+        temporal_weight_q_ref=1.0,
+        y_mean=[0.0, 0.0],
+        y_std=[1.0, 1.0],
+    )
+
+    assert torch.isfinite(parts["loss"])
+    assert parts["residual_weighted"] > 0
+    assert parts["temporal_weighted"] > 0
+    assert parts["amplitude"] > 0
+
+
+def test_residual_and_temporal_weights_use_physical_y_std():
+    pred = torch.zeros(1, 6, 1, 2)
+    residual = torch.zeros_like(pred)
+    current = torch.zeros(1, 1, 2)
+    target = torch.zeros_like(pred)
+    target[:, 1:, :, :] = 0.5
+    mask = torch.ones_like(target, dtype=torch.bool)
+    height = torch.tensor([[250.0]])
+
+    parts = residual_physics_loss(
+        pred,
+        residual,
+        target,
+        mask,
+        current,
+        height,
+        lambda_residual_weighted=1.0,
+        lambda_temporal_weighted=1.0,
+        residual_weight_q_ref=1.0,
+        temporal_weight_q_ref=1.0,
+        y_mean=[0.0, 0.0],
+        y_std=[4.0, 4.0],
+    )
+
+    assert parts["mean_residual_weight"] > 3.0
+    assert parts["max_temporal_weight"] > 3.0
+
+
+def test_residual_amplitude_loss_uses_only_positions_with_two_valid_times():
+    pred = torch.zeros(1, 6, 2, 2)
+    target = torch.zeros_like(pred)
+    target[:, :, 0, :] = torch.arange(6, dtype=torch.float32).view(1, 6, 1)
+    target[:, :, 1, :] = 100.0
+    mask = torch.zeros_like(target, dtype=torch.bool)
+    mask[:, :, 0, :] = True
+    mask[:, 0, 1, :] = True
+
+    loss = residual_amplitude_loss(pred, target, mask, amplitude_eps=1e-4)
+
+    assert torch.isfinite(loss)
+    assert loss > 0
 
 
 def test_masked_mse_loss_alias():

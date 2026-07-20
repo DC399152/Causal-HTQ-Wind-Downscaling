@@ -1,0 +1,109 @@
+data:
+  dataset_dir: data/datasets/paris_dufeng_1h_to_10min_12h
+  context_hours: 12
+  target_steps: 6
+training:
+  seed: 42
+  batch_size: 64
+  max_epochs: 150
+  learning_rate: 0.00015
+  weight_decay: 0.001
+  num_workers: 0
+  gradient_clip_norm: 1.0
+  scheduler:
+    type: warmup_cosine
+    warmup_epochs: 10
+    min_learning_rate: 1.0e-06
+  early_stopping:
+    monitor: MAE_ms
+    patience: 35
+    min_delta: 0.0001
+model:
+  name: meteo_gated_causal_htq_transformer
+  d_model: 256
+  nhead: 8
+  num_encoder_layers: 5
+  num_decoder_layers: 5
+  dim_feedforward: 1024
+  dropout: 0.15
+  enforce_zero_mean_residual: false
+multimodal:
+  use_meteo: true
+  use_static: true
+  fusion_type: gated_cross_attention
+meteo:
+  input_type: pressure_level_station
+  context_hours: 12
+  pressure_levels_hpa:
+  - 1000
+  - 975
+  - 950
+  - 925
+  - 900
+  num_pressure_levels: 5
+  num_meteo_channels: 2
+  channel_names:
+  - temperature
+  - humidity
+  use_delta: true
+  use_mask_channels: false
+static:
+  input_dim: 17
+  n_static_tokens: 1
+  encoder_type: mlp
+  hidden_dim: 512
+  dropout: 0.15
+  feature_names:
+  - LCZ_1_frac_500m
+  - LCZ_2_frac_500m
+  - LCZ_3_frac_500m
+  - LCZ_4_frac_500m
+  - LCZ_5_frac_500m
+  - LCZ_6_frac_500m
+  - LCZ_7_frac_500m
+  - LCZ_8_frac_500m
+  - LCZ_9_frac_500m
+  - LCZ_10_frac_500m
+  - LCZ_11_frac_500m
+  - LCZ_12_frac_500m
+  - LCZ_13_frac_500m
+  - LCZ_14_frac_500m
+  - LCZ_15_frac_500m
+  - LCZ_16_frac_500m
+  - LCZ_17_frac_500m
+query_builder:
+  type: context_conditioned
+  use_temporal_context: true
+  use_multiscale_trend: true
+  trend_scales:
+  - 1
+  - 3
+  - 5
+  use_context_projection: true
+  use_context_layernorm: true
+fusion:
+  nhead: 8
+  dropout: 0.15
+  gate_init_bias: -2.0
+loss:
+  type: residual_physics
+  lambda_wind: 1.0
+  lambda_extreme: 0.0
+  lambda_residual_weighted: 0.5
+  lambda_temporal: 0.5
+  lambda_temporal_weighted: 0.5
+  lambda_roughness: 0.1
+  lambda_amplitude: 0.01
+  amplitude_eps: 0.0001
+  lambda_vertical: 0.05
+  lambda_consistency: 0.05
+  residual_weight:
+    alpha: 1.0
+    gamma: 1.0
+    q_ref: 1.0
+    max_weight: 5.0
+  temporal_weight:
+    alpha: 1.0
+    gamma: 1.0
+    q_ref: 1.0
+    max_weight: 5.0

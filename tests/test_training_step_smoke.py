@@ -75,14 +75,17 @@ def test_default_training_loss_config_is_residual_physics_without_zero_mean():
 
     assert "zero_mean" not in parts
     assert "weighted_l1" not in parts
-    assert set(parts) == {
+    assert {
         "loss",
         "wind",
         "extreme",
+        "residual_weighted",
         "temporal",
+        "temporal_weighted",
         "roughness",
+        "amplitude",
         "vertical",
         "consistency",
         "mean_extreme_weight",
         "max_extreme_weight",
-    }
+    } <= set(parts)

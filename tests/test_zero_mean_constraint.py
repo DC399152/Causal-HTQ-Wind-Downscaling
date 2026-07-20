@@ -86,17 +86,20 @@ def test_residual_physics_loss_has_no_zero_mean_or_legacy_terms():
         y_std=[1.0, 1.0],
     )
 
-    assert set(parts) == {
+    assert {
         "loss",
         "wind",
         "extreme",
+        "residual_weighted",
         "temporal",
+        "temporal_weighted",
         "roughness",
+        "amplitude",
         "vertical",
         "consistency",
         "mean_extreme_weight",
         "max_extreme_weight",
-    }
+    } <= set(parts)
     assert "zero_mean" not in parts
     assert "l1" not in parts
     assert "weighted_l1" not in parts

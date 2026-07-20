@@ -1,28 +1,31 @@
 data:
-  dataset_dir: data/datasets/paris_dufeng_1h_to_10min_12h
+  dataset_dir: data/datasets/paris_dufeng_1h_to_10min_12h_overfit512
   context_hours: 12
   target_steps: 6
 
 training:
   seed: 42
   batch_size: 64
-  max_epochs: 60
-  learning_rate: 0.0001
-  weight_decay: 0.01
+  max_epochs: 300
+  learning_rate: 0.0003
+  weight_decay: 0.0
   num_workers: 0
+  gradient_clip_norm: 1.0
+  scheduler:
+    type: none
   early_stopping:
     monitor: MAE_ms
-    patience: 25
+    patience: 80
     min_delta: 0.0
 
 model:
   name: meteo_gated_causal_htq_transformer
-  d_model: 64
-  nhead: 4
-  num_encoder_layers: 2
-  num_decoder_layers: 2
-  dim_feedforward: 256
-  dropout: 0.1
+  d_model: 128
+  nhead: 8
+  num_encoder_layers: 3
+  num_decoder_layers: 3
+  dim_feedforward: 512
+  dropout: 0.0
   enforce_zero_mean_residual: false
 
 multimodal:
@@ -45,7 +48,7 @@ static:
   n_static_tokens: 1
   encoder_type: mlp
   hidden_dim: 128
-  dropout: 0.1
+  dropout: 0.0
   feature_names:
     - LCZ_1_frac_500m
     - LCZ_2_frac_500m
@@ -75,21 +78,31 @@ query_builder:
 
 fusion:
   nhead: 4
-  dropout: 0.1
+  dropout: 0.0
   gate_init_bias: -2.0
 
 loss:
   type: residual_physics
 
   lambda_wind: 1.0
-  lambda_extreme: 0.3
-  lambda_temporal: 0.2
+  lambda_extreme: 0.0
+  lambda_residual_weighted: 0.5
+  lambda_temporal: 0.5
+  lambda_temporal_weighted: 0.5
   lambda_roughness: 0.1
+  lambda_amplitude: 0.01
+  amplitude_eps: 0.0001
   lambda_vertical: 0.05
-  lambda_consistency: 0.1
+  lambda_consistency: 0.05
 
-  extreme:
-    beta: 1.0
-    threshold: 10.0
-    scale: 2.0
+  residual_weight:
+    alpha: 1.0
+    gamma: 1.0
+    q_ref: 1.0
+    max_weight: 5.0
+
+  temporal_weight:
+    alpha: 1.0
+    gamma: 1.0
+    q_ref: 1.0
     max_weight: 5.0

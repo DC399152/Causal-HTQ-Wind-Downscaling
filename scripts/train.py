@@ -164,14 +164,26 @@ def compute_loss_parts(outputs: dict[str, Any], batch: dict[str, Any], loss_conf
         batch.get("height"),
         lambda_wind=float(loss_config["lambda_wind"]),
         lambda_extreme=float(loss_config["lambda_extreme"]),
+        lambda_residual_weighted=float(loss_config["lambda_residual_weighted"]),
         lambda_temporal=float(loss_config["lambda_temporal"]),
+        lambda_temporal_weighted=float(loss_config["lambda_temporal_weighted"]),
         lambda_roughness=float(loss_config["lambda_roughness"]),
+        lambda_amplitude=float(loss_config["lambda_amplitude"]),
         lambda_vertical=float(loss_config["lambda_vertical"]),
         lambda_consistency=float(loss_config["lambda_consistency"]),
         extreme_beta=float(loss_config["extreme_beta"]),
         extreme_threshold=float(loss_config["extreme_threshold"]),
         extreme_scale=float(loss_config["extreme_scale"]),
         extreme_max_weight=float(loss_config["extreme_max_weight"]),
+        residual_weight_alpha=float(loss_config["residual_weight_alpha"]),
+        residual_weight_gamma=float(loss_config["residual_weight_gamma"]),
+        residual_weight_q_ref=float(loss_config["residual_weight_q_ref"]),
+        residual_weight_max=float(loss_config["residual_weight_max"]),
+        temporal_weight_alpha=float(loss_config["temporal_weight_alpha"]),
+        temporal_weight_gamma=float(loss_config["temporal_weight_gamma"]),
+        temporal_weight_q_ref=float(loss_config["temporal_weight_q_ref"]),
+        temporal_weight_max=float(loss_config["temporal_weight_max"]),
+        amplitude_eps=float(loss_config["amplitude_eps"]),
         y_mean=loss_config.get("y_mean"),
         y_std=loss_config.get("y_std"),
     )
@@ -191,18 +203,61 @@ def _average_loss_totals(prefix: str, total: dict[str, float], total_batches: in
     return {f"{prefix}_loss_norm_{key}": value / total_batches for key, value in total.items()}
 
 
+def build_scheduler(optimizer, train_cfg: dict[str, Any], steps_per_epoch: int, max_epochs: int, base_lr: float):
+    """Build optional step-level warmup + cosine scheduler."""
+
+    scheduler_cfg = train_cfg.get("scheduler", {}) or {}
+    scheduler_type = str(scheduler_cfg.get("type", "none")).lower()
+    if scheduler_type in {"none", "off", ""}:
+        return None, {"type": "none"}
+    if scheduler_type != "warmup_cosine":
+        raise ValueError(f"Unsupported scheduler.type: {scheduler_type!r}")
+
+    warmup_epochs = float(scheduler_cfg.get("warmup_epochs", 0))
+    min_lr = float(scheduler_cfg.get("min_learning_rate", 0.0))
+    if steps_per_epoch <= 0:
+        raise ValueError("steps_per_epoch must be positive to build scheduler")
+    total_steps = max(1, int(max_epochs * steps_per_epoch))
+    warmup_steps = min(total_steps, max(0, int(warmup_epochs * steps_per_epoch)))
+    min_factor = min_lr / base_lr if base_lr > 0 else 0.0
+
+    def lr_lambda(step: int) -> float:
+        if warmup_steps > 0 and step < warmup_steps:
+            return max(min_factor, float(step + 1) / float(warmup_steps))
+        decay_steps = max(1, total_steps - warmup_steps)
+        progress = min(1.0, max(0.0, float(step - warmup_steps) / float(decay_steps)))
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_factor + (1.0 - min_factor) * cosine
+
+    torch = require_torch()
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+    info = {
+        "type": "warmup_cosine",
+        "warmup_epochs": warmup_epochs,
+        "warmup_steps": warmup_steps,
+        "total_steps": total_steps,
+        "min_learning_rate": min_lr,
+    }
+    return scheduler, info
+
+
 def train_one_epoch(
     model,
     loader,
     optimizer,
     device,
     loss_config: dict[str, float | str],
+    gradient_clip_norm: float | None = None,
+    scheduler=None,
     limit_batches: int | None = None,
 ) -> dict[str, float]:
     """Train for one epoch using normalized-space weighted HTQ losses."""
 
     model.train()
     total: dict[str, float] = {}
+    grad_norm_total = 0.0
+    grad_norm_count = 0
+    lr_total = 0.0
     total_batches = 0
     for batch_idx, batch in enumerate(loader):
         if limit_batches is not None and batch_idx >= limit_batches:
@@ -212,8 +267,22 @@ def train_one_epoch(
         out = model_forward(model, batch)
         loss_parts = compute_loss_parts(out, batch, loss_config)
         loss = loss_parts["loss"]
+        torch = require_torch()
+        if not torch.isfinite(loss):
+            raise ValueError(f"Non-finite training loss at batch {batch_idx}: {float(loss.detach().cpu())}")
         loss.backward()
+        if gradient_clip_norm is not None and gradient_clip_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                gradient_clip_norm,
+                error_if_nonfinite=True,
+            )
+            grad_norm_total += float(grad_norm)
+            grad_norm_count += 1
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        lr_total += float(optimizer.param_groups[0]["lr"])
 
         _add_loss_totals(total, loss_parts)
         total_batches += 1
@@ -222,6 +291,9 @@ def train_one_epoch(
         raise ValueError("No training batches were processed")
     averaged = _average_loss_totals("train", total, total_batches)
     averaged["train_loss_norm_total"] = averaged.pop("train_loss_norm_loss")
+    averaged["train_lr"] = lr_total / total_batches
+    if grad_norm_count:
+        averaged["train_grad_norm"] = grad_norm_total / grad_norm_count
     return averaged
 
 
@@ -276,12 +348,24 @@ def default_loss_config() -> dict[str, float | str]:
         "lambda_vertical": 0.05,
         "lambda_wind": 1.0,
         "lambda_extreme": 0.3,
+        "lambda_residual_weighted": 0.0,
+        "lambda_temporal_weighted": 0.0,
         "lambda_roughness": 0.1,
+        "lambda_amplitude": 0.0,
+        "amplitude_eps": 1e-4,
         "lambda_consistency": 0.1,
         "extreme_beta": 1.0,
         "extreme_threshold": 10.0,
         "extreme_scale": 2.0,
         "extreme_max_weight": 5.0,
+        "residual_weight_alpha": 1.0,
+        "residual_weight_gamma": 1.0,
+        "residual_weight_q_ref": 1.0,
+        "residual_weight_max": 5.0,
+        "temporal_weight_alpha": 1.0,
+        "temporal_weight_gamma": 1.0,
+        "temporal_weight_q_ref": 1.0,
+        "temporal_weight_max": 5.0,
     }
 
 
@@ -292,9 +376,11 @@ def describe_loss_type(loss_config: dict[str, float | str]) -> str:
     if loss_type == "residual_physics":
         return (
             "lambda_wind*wind_l1 + lambda_extreme*extreme_weighted_l1 + "
+            "lambda_residual_weighted*residual_weighted_l1 + "
             "lambda_temporal*residual_temporal_l1 + "
+            "lambda_temporal_weighted*residual_temporal_weighted_l1 + "
             "lambda_roughness*residual_second_order_l1 + lambda_vertical*vertical_shear_l1 + "
-            "lambda_consistency*hourly_consistency_l1"
+            "lambda_amplitude*residual_amplitude_l1 + lambda_consistency*hourly_consistency_l1"
         )
     return f"unsupported loss type: {loss_type}"
 
@@ -316,15 +402,25 @@ def loss_config_from_config(config: dict[str, Any], args: argparse.Namespace) ->
 
     loss_cfg = config.get("loss", {})
     extreme_cfg = loss_cfg.get("extreme", {})
+    residual_weight_cfg = loss_cfg.get("residual_weight", {})
+    temporal_weight_cfg = loss_cfg.get("temporal_weight", {})
     defaults = default_loss_config()
     return {
         "type": str(loss_cfg.get("type", defaults["type"])),
         "lambda_wind": float(loss_cfg.get("lambda_wind", defaults["lambda_wind"])),
         "lambda_extreme": float(loss_cfg.get("lambda_extreme", defaults["lambda_extreme"])),
+        "lambda_residual_weighted": float(
+            loss_cfg.get("lambda_residual_weighted", defaults["lambda_residual_weighted"])
+        ),
         "lambda_temporal": args.lambda_temporal
         if args.lambda_temporal is not None
         else float(loss_cfg.get("lambda_temporal", defaults["lambda_temporal"])),
+        "lambda_temporal_weighted": float(
+            loss_cfg.get("lambda_temporal_weighted", defaults["lambda_temporal_weighted"])
+        ),
         "lambda_roughness": float(loss_cfg.get("lambda_roughness", defaults["lambda_roughness"])),
+        "lambda_amplitude": float(loss_cfg.get("lambda_amplitude", defaults["lambda_amplitude"])),
+        "amplitude_eps": float(loss_cfg.get("amplitude_eps", defaults["amplitude_eps"])),
         "lambda_vertical": args.lambda_vertical
         if args.lambda_vertical is not None
         else float(loss_cfg.get("lambda_vertical", defaults["lambda_vertical"])),
@@ -336,6 +432,30 @@ def loss_config_from_config(config: dict[str, Any], args: argparse.Namespace) ->
         "extreme_scale": float(extreme_cfg.get("scale", loss_cfg.get("extreme_scale", defaults["extreme_scale"]))),
         "extreme_max_weight": float(
             extreme_cfg.get("max_weight", loss_cfg.get("extreme_max_weight", defaults["extreme_max_weight"]))
+        ),
+        "residual_weight_alpha": float(
+            residual_weight_cfg.get("alpha", loss_cfg.get("residual_weight_alpha", defaults["residual_weight_alpha"]))
+        ),
+        "residual_weight_gamma": float(
+            residual_weight_cfg.get("gamma", loss_cfg.get("residual_weight_gamma", defaults["residual_weight_gamma"]))
+        ),
+        "residual_weight_q_ref": float(
+            residual_weight_cfg.get("q_ref", loss_cfg.get("residual_weight_q_ref", defaults["residual_weight_q_ref"]))
+        ),
+        "residual_weight_max": float(
+            residual_weight_cfg.get("max_weight", loss_cfg.get("residual_weight_max", defaults["residual_weight_max"]))
+        ),
+        "temporal_weight_alpha": float(
+            temporal_weight_cfg.get("alpha", loss_cfg.get("temporal_weight_alpha", defaults["temporal_weight_alpha"]))
+        ),
+        "temporal_weight_gamma": float(
+            temporal_weight_cfg.get("gamma", loss_cfg.get("temporal_weight_gamma", defaults["temporal_weight_gamma"]))
+        ),
+        "temporal_weight_q_ref": float(
+            temporal_weight_cfg.get("q_ref", loss_cfg.get("temporal_weight_q_ref", defaults["temporal_weight_q_ref"]))
+        ),
+        "temporal_weight_max": float(
+            temporal_weight_cfg.get("max_weight", loss_cfg.get("temporal_weight_max", defaults["temporal_weight_max"]))
         ),
     }
 
@@ -405,6 +525,40 @@ def validate_monitor_value(monitor_name: str, monitor_value: float) -> None:
         raise ValueError(f"Validation monitor {monitor_name} is not finite: {monitor_value}")
 
 
+def maybe_save_named_checkpoints(
+    run_dir: Path,
+    model,
+    optimizer,
+    epoch: int,
+    row: dict[str, Any],
+    model_config: HTQConfig,
+    loss_config: dict[str, float | str],
+    best_values: dict[str, float],
+    best_epochs: dict[str, int],
+) -> None:
+    """Save additional validation-best checkpoints without changing early stopping."""
+
+    specs = {
+        "best_mae.pt": ("val_MAE_ms", "min"),
+        "best_loss.pt": ("val_loss_norm_total", "min"),
+        "best_residual_acc.pt": ("val_residual_ACC", "max"),
+        "best_temporal_gradient_acc.pt": ("val_temporal_gradient_ACC", "max"),
+        "best_composite.pt": ("val_residual_temporal_composite", "max"),
+    }
+    composite = float(row["val_residual_ACC"]) + float(row["val_temporal_gradient_ACC"])
+    row["val_residual_temporal_composite"] = composite
+
+    for filename, (metric_name, mode) in specs.items():
+        value = float(row[metric_name])
+        validate_monitor_value(metric_name, value)
+        previous = best_values.get(filename)
+        improved = previous is None or (value < previous if mode == "min" else value > previous)
+        if improved:
+            best_values[filename] = value
+            best_epochs[filename] = epoch
+            save_checkpoint(run_dir / filename, model, optimizer, epoch, row, model_config, loss_config)
+
+
 def load_best_checkpoint_for_test(best_checkpoint_path: str | Path, model, device) -> dict[str, Any]:
     """Load best.pt into ``model`` before final test evaluation."""
 
@@ -428,6 +582,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-epochs", type=int, default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=None)
+    parser.add_argument("--gradient-clip-norm", type=float, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--limit-train-batches", type=int, default=None)
     parser.add_argument("--limit-eval-batches", type=int, default=None)
@@ -474,6 +629,12 @@ def main() -> None:
         else float(train_cfg.get("weight_decay", 0.01))
     )
     num_workers = args.num_workers if args.num_workers is not None else int(train_cfg.get("num_workers", 0))
+    gradient_clip_norm = (
+        args.gradient_clip_norm
+        if args.gradient_clip_norm is not None
+        else train_cfg.get("gradient_clip_norm")
+    )
+    gradient_clip_norm = None if gradient_clip_norm is None else float(gradient_clip_norm)
     dataset_dir = args.dataset_dir or data_cfg.get("dataset_dir", DEFAULT_DATASET_DIR)
     run_dir = Path(args.run_dir)
     loss_config = loss_config_from_config(config, args)
@@ -492,6 +653,13 @@ def main() -> None:
     train_loader = make_loader(dataset_dir, "train", batch_size, True, num_workers)
     val_loader = make_loader(dataset_dir, "val", batch_size, False, num_workers)
     test_loader = make_loader(dataset_dir, "test", batch_size, False, num_workers)
+    scheduler, scheduler_info = build_scheduler(
+        optimizer,
+        train_cfg,
+        len(train_loader),
+        max_epochs,
+        learning_rate,
+    )
 
     print(f"dataset_dir: {dataset_dir}")
     print(f"run_dir: {run_dir}")
@@ -500,13 +668,18 @@ def main() -> None:
     print(f"batch_size: {batch_size}")
     print(f"learning_rate: {learning_rate}")
     print(f"weight_decay: {weight_decay}")
+    print(f"gradient_clip_norm: {gradient_clip_norm}")
+    print(f"scheduler: {scheduler_info}")
     print(f"num_workers: {num_workers}")
     print(
         f"loss: {loss_config['type']} normalized loss "
         f"(lambda_wind={loss_config['lambda_wind']}, "
         f"lambda_extreme={loss_config['lambda_extreme']}, "
+        f"lambda_residual_weighted={loss_config['lambda_residual_weighted']}, "
         f"lambda_temporal={loss_config['lambda_temporal']}, "
+        f"lambda_temporal_weighted={loss_config['lambda_temporal_weighted']}, "
         f"lambda_roughness={loss_config['lambda_roughness']}, "
+        f"lambda_amplitude={loss_config['lambda_amplitude']}, "
         f"lambda_vertical={loss_config['lambda_vertical']})"
     )
     print("val/test metrics: denormalized physical m/s")
@@ -523,6 +696,8 @@ def main() -> None:
     epochs_without_improvement = 0
     stopped_early = False
     stop_reason = None
+    named_checkpoint_best_values: dict[str, float] = {}
+    named_checkpoint_best_epochs: dict[str, int] = {}
     history: list[dict[str, Any]] = []
     for epoch in range(1, max_epochs + 1):
         train_metrics = train_one_epoch(
@@ -531,6 +706,8 @@ def main() -> None:
             optimizer,
             device,
             loss_config,
+            gradient_clip_norm=gradient_clip_norm,
+            scheduler=scheduler,
             limit_batches=args.limit_train_batches,
         )
         val_metrics = evaluate(
@@ -553,6 +730,17 @@ def main() -> None:
         )
 
         save_checkpoint(run_dir / "last.pt", model, optimizer, epoch, row, model_config, loss_config)
+        maybe_save_named_checkpoints(
+            run_dir,
+            model,
+            optimizer,
+            epoch,
+            row,
+            model_config,
+            loss_config,
+            named_checkpoint_best_values,
+            named_checkpoint_best_epochs,
+        )
         monitor_name = str(early_stopping["monitor"])
         if monitor_name not in val_metrics:
             raise KeyError(f"Validation metric {monitor_name!r} is not available")
@@ -616,13 +804,18 @@ def main() -> None:
         "max_epochs": max_epochs,
         "learning_rate": learning_rate,
         "weight_decay": weight_decay,
+        "gradient_clip_norm": gradient_clip_norm,
+        "scheduler": scheduler_info,
         "num_workers": num_workers,
         "loss_config": loss_config,
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
             "lambda_extreme": float(loss_config["lambda_extreme"]),
+            "lambda_residual_weighted": float(loss_config["lambda_residual_weighted"]),
             "lambda_temporal": float(loss_config["lambda_temporal"]),
+            "lambda_temporal_weighted": float(loss_config["lambda_temporal_weighted"]),
             "lambda_roughness": float(loss_config["lambda_roughness"]),
+            "lambda_amplitude": float(loss_config["lambda_amplitude"]),
             "lambda_vertical": float(loss_config["lambda_vertical"]),
             "lambda_consistency": float(loss_config["lambda_consistency"]),
         },
@@ -635,6 +828,14 @@ def main() -> None:
             "best_monitor_value": best_monitor,
         },
         "history": history,
+        "checkpoint_selection": {
+            name: {
+                "path": str(run_dir / name),
+                "epoch": int(named_checkpoint_best_epochs[name]),
+                "metric_value": float(named_checkpoint_best_values[name]),
+            }
+            for name in sorted(named_checkpoint_best_values)
+        },
         "test": test_metrics,
         "test_checkpoint": str(best_checkpoint_path),
         "test_checkpoint_epoch": int(best_checkpoint["epoch"]),
