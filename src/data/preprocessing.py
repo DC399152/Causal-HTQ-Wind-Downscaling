@@ -16,6 +16,7 @@ class HeightSelectionConfig:
     selected_heights_agl: tuple[float, ...]
     height_reference: str
     max_height_diff: float
+    instrument_height_agl_m: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,7 @@ class QualityControlConfig:
 
 @dataclass(frozen=True)
 class SplitConfig:
-    """Chronological split settings."""
+    """Dataset split settings."""
 
     train_ratio: float
     val_ratio: float
@@ -41,6 +42,13 @@ class SplitConfig:
     split_gap_hours: int
     split_by_unique_time: bool
     split_time_key: str
+    strategy: str = "chronological"
+    seed: int = 42
+    event_gap_hours: int = 24
+    purge_hours: int = 24
+    block_duration_hours: dict[str, int] | None = None
+    balance_weights: dict[str, float] | None = None
+    search_trials: int = 256
 
 
 @dataclass(frozen=True)
@@ -109,6 +117,7 @@ class PreprocessingConfig:
     split_within_source: bool
     split_within_station: bool
     output_format: str
+    expected_station_ids: tuple[str, ...] = ()
 
 
 def load_yaml_config(path: str | Path) -> dict[str, Any]:
@@ -162,6 +171,7 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
         ),
         height_reference=str(height_cfg.get("height_reference", "agl_rounded_station_altitude")),
         max_height_diff=float(height_cfg.get("max_height_diff", 0.1)),
+        instrument_height_agl_m=float(height_cfg.get("instrument_height_agl_m", 0.0)),
     )
     parsed_height_by_source: dict[str, HeightSelectionConfig] = {}
     for source_name, source_height in height_by_source_cfg.items():
@@ -171,6 +181,9 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             selected_heights_agl=tuple(float(v) for v in selected),
             height_reference=str(source_height.get("height_reference", default_height.height_reference)),
             max_height_diff=float(source_height.get("max_height_diff", default_height.max_height_diff)),
+            instrument_height_agl_m=float(
+                source_height.get("instrument_height_agl_m", default_height.instrument_height_agl_m)
+            ),
         )
 
     return PreprocessingConfig(
@@ -238,10 +251,24 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             split_gap_hours=int(split.get("split_gap_hours", 0)),
             split_by_unique_time=bool(split.get("split_by_unique_time", True)),
             split_time_key=str(split.get("split_time_key", "target_time_start")),
+            strategy=str(split.get("strategy", "chronological")),
+            seed=int(split.get("seed", 42)),
+            event_gap_hours=int(split.get("event_gap_hours", 24)),
+            purge_hours=int(split.get("purge_hours", split.get("split_gap_hours", 24))),
+            block_duration_hours={
+                str(name): int(hours)
+                for name, hours in dict(split.get("block_duration_hours", {"default": 168})).items()
+            },
+            balance_weights={
+                str(name): float(weight)
+                for name, weight in dict(split.get("balance_weights", {})).items()
+            },
+            search_trials=int(split.get("search_trials", 256)),
         ),
         split_within_source=bool(split.get("split_within_source", False)),
         split_within_station=bool(split.get("split_within_station", False)),
         output_format=str(output.get("format", "npz")),
+        expected_station_ids=tuple(str(v) for v in output.get("expected_station_ids", ())),
     )
 
 
@@ -259,6 +286,24 @@ def validate_config(config: PreprocessingConfig) -> list[str]:
         raise ValueError("Only data_alignment.height_schema_policy=error is currently supported")
     if config.data_alignment.max_hourly_target_height_diff_m < 0:
         raise ValueError("data_alignment.max_hourly_target_height_diff_m must be non-negative")
+    allowed_height_references = {
+        "agl",
+        "agl_rounded_station_altitude",
+        "ground_agl_from_asl",
+        "instrument_relative_to_ground_agl",
+    }
+    for source_name, height in {"default": config.height, **config.height_by_source}.items():
+        if height.height_reference not in allowed_height_references:
+            raise ValueError(
+                f"Unsupported height_reference for {source_name}: {height.height_reference}"
+            )
+        if height.max_height_diff < 0:
+            raise ValueError(f"max_height_diff must be non-negative for {source_name}")
+        if height.instrument_height_agl_m < 0:
+            raise ValueError(f"instrument_height_agl_m must be non-negative for {source_name}")
+        selected = np.asarray(height.selected_heights_agl, dtype=float)
+        if not np.isfinite(selected).all() or np.any(np.diff(selected) <= 0):
+            raise ValueError(f"selected_heights_agl must be finite and strictly increasing for {source_name}")
     if config.context_alignment != "causal_last":
         raise ValueError("New preprocessing requires context_alignment=causal_last")
     if config.target_offsets_minutes != (0, 10, 20, 30, 40, 50):
@@ -275,6 +320,26 @@ def validate_config(config: PreprocessingConfig) -> list[str]:
         warnings.append("QC flag use is enabled; verify flag semantics with inspect_raw_nc.py")
     if config.splits.split_gap_hours < 0:
         raise ValueError("split_gap_hours must be non-negative")
+    if config.splits.strategy not in {"chronological", "balanced_blocks"}:
+        raise ValueError("splits.strategy must be chronological or balanced_blocks")
+    if config.splits.event_gap_hours < 0 or config.splits.purge_hours < 0:
+        raise ValueError("event_gap_hours and purge_hours must be non-negative")
+    if config.splits.search_trials < 1:
+        raise ValueError("search_trials must be positive")
+    if not np.isclose(
+        config.splits.train_ratio + config.splits.val_ratio + config.splits.test_ratio,
+        1.0,
+    ):
+        raise ValueError("train_ratio + val_ratio + test_ratio must equal 1")
+    if any(hours <= 0 for hours in (config.splits.block_duration_hours or {}).values()):
+        raise ValueError("All block_duration_hours values must be positive")
+    if config.splits.strategy == "balanced_blocks" and any(
+        config.splits.purge_hours >= hours
+        for hours in (config.splits.block_duration_hours or {}).values()
+    ):
+        raise ValueError("purge_hours must be smaller than every balanced block duration")
+    if any(weight < 0 for weight in (config.splits.balance_weights or {}).values()):
+        raise ValueError("All balance_weights values must be non-negative")
     if config.meteo.enabled:
         if config.meteo.source != "era5":
             raise ValueError("Only meteo.source=era5 is supported")
@@ -311,14 +376,27 @@ def select_height_indices(
     raw_heights: np.ndarray,
     station_altitude: float,
     height_config: HeightSelectionConfig,
+    station_height: float = 0.0,
 ) -> dict[str, np.ndarray]:
     """Select nearest raw height layers for configured AGL target heights."""
 
     heights = np.asarray(raw_heights, dtype=float)
-    station_ref = float(round(station_altitude)) if "rounded" in height_config.height_reference else float(station_altitude)
+    if height_config.height_reference == "ground_agl_from_asl":
+        if not np.isfinite(station_altitude) or not np.isfinite(station_height):
+            raise ValueError("Strict ground AGL selection requires finite station_altitude and station_height")
+        station_ref = float(station_altitude) - float(station_height)
+    else:
+        # Legacy modes define AGL relative to the measurement station itself.
+        station_ref = (
+            float(round(station_altitude))
+            if "rounded" in height_config.height_reference
+            else float(station_altitude)
+        )
     selected_agl = np.asarray(height_config.selected_heights_agl, dtype=float)
     target_asl = station_ref + selected_agl
     indices = np.asarray([int(np.argmin(np.abs(heights - h))) for h in target_asl], dtype=np.int64)
+    if len(np.unique(indices)) != len(indices):
+        raise ValueError("Selected AGL heights map to duplicate raw height layers")
     actual_asl = heights[indices]
     diff = np.abs(actual_asl - target_asl)
     if np.any(diff > height_config.max_height_diff):

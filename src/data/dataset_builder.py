@@ -160,6 +160,13 @@ def _normalize_station_id(value) -> str:
     return str(value).strip()
 
 
+def _station_enabled_for_source(config: PreprocessingConfig, source_name: str, station_id: str) -> bool:
+    source_cfg = dict((config.sources or {}).get(source_name, {}) or {})
+    included = {str(v) for v in source_cfg.get("include_station_ids", ())}
+    excluded = {str(v) for v in source_cfg.get("exclude_station_ids", ())}
+    return (not included or station_id in included) and station_id not in excluded
+
+
 def _station_ids_for_dataset(ds, config: PreprocessingConfig, station_count: int, source) -> list[str]:
     ids = [_normalize_station_id(v) for v in _station_ids(ds, config, station_count)]
     duplicates = sorted({station_id for station_id in ids if ids.count(station_id) > 1})
@@ -393,19 +400,34 @@ def _build_samples_from_pair(
         config,
     )
     station_alt_name = config.variables.get("station_altitude")
+    station_height_name = config.variables.get("station_height")
 
     for station_idx, station_id in enumerate(hourly_station_ids):
+        if not _station_enabled_for_source(config, "paris_nc", station_id):
+            continue
         if station_id not in target_index_by_station:
             continue
         target_station_idx = target_index_by_station[station_id]
         station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
         target_station_altitude = station_value(target_ds, station_alt_name, target_station_idx, default=station_altitude)
+        station_height = station_value(hourly_ds, station_height_name, station_idx, default=0.0)
+        target_station_height = station_value(target_ds, station_height_name, target_station_idx, default=station_height)
         try:
             height_config = _height_config_for_source(config, "paris_nc")
             hourly_raw_heights = _height_values_for_station(hourly_ds, config, station_idx)
             target_raw_heights = _height_values_for_station(target_ds, config, target_station_idx)
-            hourly_height_meta = select_height_indices(hourly_raw_heights, station_altitude, height_config)
-            target_height_meta = select_height_indices(target_raw_heights, target_station_altitude, height_config)
+            hourly_height_meta = select_height_indices(
+                hourly_raw_heights,
+                station_altitude,
+                height_config,
+                station_height=station_height,
+            )
+            target_height_meta = select_height_indices(
+                target_raw_heights,
+                target_station_altitude,
+                height_config,
+                station_height=target_station_height,
+            )
             _validate_hourly_target_height_match(
                 station_id,
                 pair.hourly_path,
@@ -514,24 +536,39 @@ def _load_pair_into_station_series(
         config,
     )
     station_alt_name = config.variables.get("station_altitude")
+    station_height_name = config.variables.get("station_height")
     station_lat_name = config.variables.get("station_lat")
     station_lon_name = config.variables.get("station_lon")
     source = f"{pair.hourly_path.name}|{pair.target_path.name}"
 
     for station_idx, station_id in enumerate(hourly_station_ids):
+        if not _station_enabled_for_source(config, "paris_nc", station_id):
+            continue
         if station_id not in target_index_by_station:
             continue
         target_station_idx = target_index_by_station[station_id]
         station_altitude = station_value(hourly_ds, station_alt_name, station_idx, default=0.0)
         target_station_altitude = station_value(target_ds, station_alt_name, target_station_idx, default=station_altitude)
+        station_height = station_value(hourly_ds, station_height_name, station_idx, default=0.0)
+        target_station_height = station_value(target_ds, station_height_name, target_station_idx, default=station_height)
         station_lat = station_value(hourly_ds, station_lat_name, station_idx, default=np.nan)
         station_lon = station_value(hourly_ds, station_lon_name, station_idx, default=np.nan)
         try:
             height_config = _height_config_for_source(config, "paris_nc")
             hourly_raw_heights = _height_values_for_station(hourly_ds, config, station_idx)
             target_raw_heights = _height_values_for_station(target_ds, config, target_station_idx)
-            hourly_height_meta = select_height_indices(hourly_raw_heights, station_altitude, height_config)
-            target_height_meta = select_height_indices(target_raw_heights, target_station_altitude, height_config)
+            hourly_height_meta = select_height_indices(
+                hourly_raw_heights,
+                station_altitude,
+                height_config,
+                station_height=station_height,
+            )
+            target_height_meta = select_height_indices(
+                target_raw_heights,
+                target_station_altitude,
+                height_config,
+                station_height=target_station_height,
+            )
             _validate_hourly_target_height_match(
                 station_id,
                 pair.hourly_path,
@@ -685,10 +722,25 @@ def _load_standard_csv_source(
         if target_raw_heights.size == 0:
             warnings.append(f"Standard source {source_name} station {station_id} has no valid target heights.")
             continue
-        hourly_indices = np.asarray([int(np.argmin(np.abs(hourly_raw_heights - h))) for h in selected], dtype=np.int64)
-        target_indices = np.asarray([int(np.argmin(np.abs(target_raw_heights - h))) for h in selected], dtype=np.int64)
-        hourly_actual = hourly_raw_heights[hourly_indices].astype(np.float32)
-        target_actual = target_raw_heights[target_indices].astype(np.float32)
+        height_offset = (
+            height_config.instrument_height_agl_m
+            if height_config.height_reference == "instrument_relative_to_ground_agl"
+            else 0.0
+        )
+        hourly_heights_agl = hourly_raw_heights + height_offset
+        target_heights_agl = target_raw_heights + height_offset
+        hourly_indices = np.asarray(
+            [int(np.argmin(np.abs(hourly_heights_agl - h))) for h in selected],
+            dtype=np.int64,
+        )
+        target_indices = np.asarray(
+            [int(np.argmin(np.abs(target_heights_agl - h))) for h in selected],
+            dtype=np.int64,
+        )
+        hourly_selected_raw = hourly_raw_heights[hourly_indices].astype(np.float32)
+        target_selected_raw = target_raw_heights[target_indices].astype(np.float32)
+        hourly_actual = hourly_heights_agl[hourly_indices].astype(np.float32)
+        target_actual = target_heights_agl[target_indices].astype(np.float32)
         diff = np.abs(hourly_actual.astype(float) - selected)
         target_diff = np.abs(target_actual.astype(float) - selected)
         if np.any(diff > height_config.max_height_diff) or np.any(target_diff > height_config.max_height_diff):
@@ -766,8 +818,8 @@ def _load_standard_csv_source(
                 source_files = sorted(set(str(v) for v in time_group["source_file"].dropna().unique()))
                 source_dict[key] = f"{source_name}:{';'.join(source_files)}"
 
-        add_records(station_hourly_raw, hourly_actual, series.hourly, series.hourly_source, "hourly")
-        add_records(station_target_raw, target_actual, series.target, series.target_source, "10min")
+        add_records(station_hourly_raw, hourly_selected_raw, series.hourly, series.hourly_source, "hourly")
+        add_records(station_target_raw, target_selected_raw, series.target, series.target_source, "10min")
 
     return warnings
 
@@ -987,10 +1039,199 @@ def _split_labels(
     return labels
 
 
+def _sample_balance_metrics(arrays: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    """Return physical-space sample summaries used only for balanced splitting."""
+
+    y = arrays["y_10min"].astype(float)
+    y_mask = arrays["y_mask"].astype(bool)
+    current = arrays["current_hourly"].astype(float)
+    current_mask = arrays["x_mask"][:, -1].astype(bool)
+    vector_valid = y_mask[..., 0] & y_mask[..., 1]
+    current_valid = current_mask[..., 0] & current_mask[..., 1]
+
+    def masked_sample_mean(values: np.ndarray, valid: np.ndarray) -> np.ndarray:
+        axes = tuple(range(1, values.ndim))
+        numerator = np.where(valid, values, 0.0).sum(axis=axes)
+        denominator = valid.sum(axis=axes)
+        return np.divide(numerator, denominator, out=np.zeros_like(numerator), where=denominator > 0)
+
+    wind_speed = np.hypot(y[..., 0], y[..., 1])
+    residual = y - current[:, None, :, :]
+    residual_valid = vector_valid & current_valid[:, None, :]
+    residual_mag = np.hypot(residual[..., 0], residual[..., 1])
+    residual_delta = residual[:, 1:] - residual[:, :-1]
+    delta_valid = residual_valid[:, 1:] & residual_valid[:, :-1]
+    gradient_mag = np.hypot(residual_delta[..., 0], residual_delta[..., 1])
+    return {
+        "wind_speed": masked_sample_mean(wind_speed, vector_valid),
+        "residual_magnitude": masked_sample_mean(residual_mag, residual_valid),
+        "temporal_gradient": masked_sample_mean(gradient_mag, delta_valid),
+        "valid_mask_rate": y_mask.reshape(y_mask.shape[0], -1).mean(axis=1),
+    }
+
+
+def _balanced_block_split_labels(
+    arrays: dict[str, np.ndarray],
+    config: PreprocessingConfig,
+) -> np.ndarray:
+    """Assign station-local time blocks while matching marginal distributions."""
+
+    n = int(arrays["x_hourly"].shape[0])
+    labels = np.full((n,), "gap", dtype=object)
+    if n == 0:
+        return labels
+
+    ratios = np.asarray(
+        [config.splits.train_ratio, config.splits.val_ratio, config.splits.test_ratio],
+        dtype=float,
+    )
+    split_names = np.asarray(["train", "val", "test"], dtype=object)
+    times = np.asarray(arrays["target_time_start"], dtype="datetime64[m]")
+    stations = arrays["station_id"].astype(str)
+    sources = arrays["source_group"].astype(str)
+    metrics = _sample_balance_metrics(arrays)
+    durations = config.splits.block_duration_hours or {"default": 168}
+    default_duration = int(durations.get("default", 168))
+    event_gap = np.timedelta64(config.splits.event_gap_hours, "h")
+    purge = np.timedelta64(config.splits.purge_hours, "h")
+    configured_weights = config.splits.balance_weights or {}
+
+    groups = np.asarray([f"{source}\0{station}" for source, station in zip(sources, stations)], dtype=object)
+    for group in sorted(set(groups.tolist())):
+        group_indices = np.where(groups == group)[0]
+        group_indices = group_indices[np.argsort(times[group_indices])]
+        source = sources[group_indices[0]]
+        duration = np.timedelta64(int(durations.get(source, default_duration)), "h")
+
+        blocks: list[dict[str, object]] = []
+        event_id = 0
+        current: list[int] = []
+        block_start = times[group_indices[0]]
+        previous_time = block_start
+        for idx in group_indices:
+            timestamp = times[idx]
+            new_event = bool(current) and timestamp - previous_time > event_gap
+            new_block = bool(current) and timestamp - block_start >= duration
+            if new_event or new_block:
+                blocks.append(
+                    {
+                        "indices": np.asarray(current, dtype=np.int64),
+                        "start": block_start,
+                        "event": event_id,
+                    }
+                )
+                if new_event:
+                    event_id += 1
+                current = []
+                block_start = timestamp
+            current.append(int(idx))
+            previous_time = timestamp
+        if current:
+            blocks.append(
+                {
+                    "indices": np.asarray(current, dtype=np.int64),
+                    "start": block_start,
+                    "event": event_id,
+                }
+            )
+        if len(blocks) < 3:
+            raise ValueError(f"Balanced block split requires at least 3 blocks for {group!r}; got {len(blocks)}")
+
+        station_values = {name: values[group_indices] for name, values in metrics.items()}
+        binned: dict[str, np.ndarray] = {}
+        for name in ("wind_speed", "residual_magnitude", "temporal_gradient"):
+            thresholds = np.quantile(station_values[name], [1.0 / 3.0, 2.0 / 3.0])
+            binned[name] = np.searchsorted(thresholds, station_values[name], side="right")
+        local_position = {int(idx): pos for pos, idx in enumerate(group_indices)}
+        months = times[group_indices].astype("datetime64[M]").astype(int) % 12
+        seasons = np.asarray([(month % 12) // 3 for month in months], dtype=np.int64)
+
+        vectors: list[np.ndarray] = []
+        for block in blocks:
+            positions = np.asarray([local_position[int(idx)] for idx in block["indices"]], dtype=np.int64)
+            vectors.append(
+                np.concatenate(
+                    [
+                        np.asarray([len(positions)], dtype=float),
+                        np.bincount(months[positions], minlength=12).astype(float),
+                        np.bincount(seasons[positions], minlength=4).astype(float),
+                        np.bincount(binned["wind_speed"][positions], minlength=3).astype(float),
+                        np.bincount(binned["residual_magnitude"][positions], minlength=3).astype(float),
+                        np.bincount(binned["temporal_gradient"][positions], minlength=3).astype(float),
+                        np.asarray([station_values["valid_mask_rate"][positions].sum()], dtype=float),
+                    ]
+                )
+            )
+        block_vectors = np.stack(vectors)
+        feature_weights = np.concatenate(
+            [
+                np.full(1, configured_weights.get("sample_count", 2.0)),
+                np.full(12, configured_weights.get("month", 0.5)),
+                np.full(4, configured_weights.get("season", 1.0)),
+                np.full(3, configured_weights.get("wind_speed", 1.0)),
+                np.full(3, configured_weights.get("residual_magnitude", 1.5)),
+                np.full(3, configured_weights.get("temporal_gradient", 1.5)),
+                np.full(1, configured_weights.get("valid_mask_rate", 0.5)),
+            ]
+        )
+        target = ratios[:, None] * block_vectors.sum(axis=0, keepdims=True)
+        target_samples = ratios * block_vectors[:, 0].sum()
+
+        group_seed = config.splits.seed + sum((i + 1) * ord(char) for i, char in enumerate(group))
+        rng = np.random.default_rng(group_seed)
+        best_assignment = None
+        best_score = float("inf")
+        for _ in range(config.splits.search_trials):
+            assignment = np.full((len(blocks),), -1, dtype=np.int64)
+            assigned_samples = np.zeros(3, dtype=float)
+            block_counts = np.zeros(3, dtype=np.int64)
+            for block_index in rng.permutation(len(blocks)):
+                remaining = len(blocks) - int((assignment >= 0).sum())
+                empty = np.where(block_counts == 0)[0]
+                candidates = empty if len(empty) >= remaining else np.arange(3)
+                deficits = np.divide(
+                    target_samples[candidates] - assigned_samples[candidates],
+                    np.maximum(target_samples[candidates], 1.0),
+                )
+                split_index = int(candidates[np.argmax(deficits + rng.random(len(candidates)) * 1e-9)])
+                assignment[block_index] = split_index
+                assigned_samples[split_index] += block_vectors[block_index, 0]
+                block_counts[split_index] += 1
+
+            actual = np.zeros_like(target)
+            for block_index, split_index in enumerate(assignment):
+                actual[split_index] += block_vectors[block_index]
+            normalized_error = (actual - target) / np.maximum(target, 1.0)
+            score = float(np.mean(feature_weights[None, :] * normalized_error**2))
+            if score < best_score:
+                best_score = score
+                best_assignment = assignment.copy()
+
+        assert best_assignment is not None
+        for block, split_index in zip(blocks, best_assignment):
+            labels[block["indices"]] = split_names[split_index]
+
+        for previous, current_block, previous_split, current_split in zip(
+            blocks[:-1],
+            blocks[1:],
+            best_assignment[:-1],
+            best_assignment[1:],
+        ):
+            if previous["event"] != current_block["event"] or previous_split == current_split:
+                continue
+            cutoff = current_block["start"] + purge
+            current_indices = current_block["indices"]
+            labels[current_indices[times[current_indices] < cutoff]] = "gap"
+
+        for split_name in split_names:
+            if not np.any(labels[group_indices] == split_name):
+                raise ValueError(f"Balanced block split left {group!r} without {split_name} samples")
+    return labels
+
+
 def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig) -> dict[str, np.ndarray]:
     if len(acc) == 0:
         return _empty_arrays(config)
-    split = _split_labels(acc.target_time_start, acc.source_group, acc.station_id, config)
     arrays = {
         # x_hourly: [N, L=6, H=6, C=2]
         "x_hourly": np.stack(acc.x_hourly).astype(np.float32),
@@ -1012,7 +1253,6 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
         "hourly_source_files": np.asarray(acc.hourly_source_files, dtype=object),
         "target_source_files": np.asarray(acc.target_source_files, dtype=object),
         "source_group": np.asarray(acc.source_group, dtype=object),
-        "split": split,
     }
     if acc.x_meteo:
         arrays["x_meteo"] = np.stack(acc.x_meteo).astype(np.float32)
@@ -1021,6 +1261,15 @@ def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig
         arrays["x_static"] = np.stack(acc.x_static).astype(np.float32)
         arrays["static_feature_names"] = np.asarray(config.static_features.feature_columns, dtype=object)
         arrays["dominant_lcz"] = np.asarray(acc.dominant_lcz, dtype=np.float32)
+    if config.splits.strategy == "balanced_blocks":
+        arrays["split"] = _balanced_block_split_labels(arrays, config)
+    else:
+        arrays["split"] = _split_labels(
+            acc.target_time_start,
+            acc.source_group,
+            acc.station_id,
+            config,
+        )
     return arrays
 
 
@@ -1065,6 +1314,14 @@ def _validate_arrays_before_write(arrays: dict[str, np.ndarray], config: Preproc
     station_ids = [str(v).strip() for v in arrays["station_id"]]
     if any(not station_id for station_id in station_ids):
         raise ValueError("station_id contains empty values")
+    if config.expected_station_ids:
+        expected = set(config.expected_station_ids)
+        actual = set(station_ids)
+        if actual != expected:
+            raise ValueError(
+                "Dataset station set does not match output.expected_station_ids: "
+                f"missing={sorted(expected - actual)}; unexpected={sorted(actual - expected)}"
+            )
     sample_keys = list(zip(station_ids, [str(v) for v in arrays["target_time_start"]]))
     if len(sample_keys) != len(set(sample_keys)):
         raise ValueError("Duplicate station_id + target_time_start samples detected")
@@ -1087,6 +1344,23 @@ def _validate_arrays_before_write(arrays: dict[str, np.ndarray], config: Preproc
             raise ValueError(f"target_times_10min outside target hour at sample {idx}")
         if not np.allclose(arrays["current_hourly"][idx], arrays["x_hourly"][idx, -1], equal_nan=True):
             raise ValueError(f"current_hourly does not match x_hourly[-1] at sample {idx}")
+
+    if config.splits.strategy == "balanced_blocks":
+        times = np.asarray(arrays["target_time_start"], dtype="datetime64[m]")
+        groups = np.asarray(
+            [
+                f"{source}\0{station}"
+                for source, station in zip(arrays["source_group"].astype(str), arrays["station_id"].astype(str))
+            ],
+            dtype=object,
+        )
+        purge = np.timedelta64(config.splits.purge_hours, "h")
+        for group in set(groups.tolist()):
+            active = np.where((groups == group) & (arrays["split"] != "gap"))[0]
+            active = active[np.argsort(times[active])]
+            for left, right in zip(active[:-1], active[1:]):
+                if arrays["split"][left] != arrays["split"][right] and times[right] - times[left] <= purge:
+                    raise ValueError(f"Balanced split purge violated for {group!r}")
 
 
 def _write_dataset(
@@ -1123,6 +1397,7 @@ def _write_dataset(
             "source_file_definition": "summary set of hourly and target source files for the sample",
         },
         "split_policy": {
+            "strategy": config.splits.strategy,
             "split_time_key": config.splits.split_time_key,
             "train_ratio": config.splits.train_ratio,
             "val_ratio": config.splits.val_ratio,
@@ -1130,10 +1405,20 @@ def _write_dataset(
             "split_gap_hours": config.splits.split_gap_hours,
             "split_within_source": config.split_within_source,
             "split_within_station": config.split_within_station,
+            "seed": config.splits.seed,
+            "event_gap_hours": config.splits.event_gap_hours,
+            "purge_hours": config.splits.purge_hours,
+            "block_duration_hours": config.splits.block_duration_hours,
+            "balance_weights": config.splits.balance_weights,
+            "search_trials": config.splits.search_trials,
             "gap_label": "gap",
         },
         "split_counts": {
             str(label): int(count) for label, count in zip(split_labels, split_counts)
+        },
+        "station_selection": {
+            "expected_station_ids": list(config.expected_station_ids),
+            "actual_station_ids": sorted({str(v) for v in arrays["station_id"]}),
         },
         "shapes": {name: list(value.shape) for name, value in arrays.items()},
         "channel_names": list(config.hourly_channels),
@@ -1162,6 +1447,7 @@ def _write_dataset(
                 "selected_heights_agl": list(height.selected_heights_agl),
                 "height_reference": height.height_reference,
                 "max_height_diff": height.max_height_diff,
+                "instrument_height_agl_m": height.instrument_height_agl_m,
             }
             for name, height in config.height_by_source.items()
         },

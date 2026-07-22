@@ -305,7 +305,9 @@ def plot_representative_samples(
             continue
         seen.add(key)
         rank = sum(1 for prev_label, _ in seen if prev_label == label)
-        output_path = figures_dir / f"sample_{label}_{rank:03d}.png"
+        filename = f"sample_{label}_{rank:03d}.png"
+        output_path = figures_dir / filename
+        context_output_path = figures_dir.parent / "figure_12" / filename
         plot_one_sample(
             model=model,
             dataset=dataset,
@@ -314,9 +316,10 @@ def plot_representative_samples(
             norm_stats=norm_stats,
             device=device,
             output_path=output_path,
+            context_output_path=context_output_path,
             label=label,
         )
-        written.append(output_path)
+        written.extend((output_path, context_output_path))
     return written
 
 
@@ -381,6 +384,7 @@ def plot_one_sample(
     norm_stats: dict[str, Any],
     device,
     output_path: Path,
+    context_output_path: Path,
     label: str,
 ) -> None:
     """Run model on one dataset item and save truth/pred/repeat plot."""
@@ -401,6 +405,7 @@ def plot_one_sample(
         out = model_forward(model, batch)
         pred_ms = y_denormalize(out["pred"], norm_stats)[0].cpu()
         target_ms = y_denormalize(batch["y_10min"], norm_stats)[0].cpu()
+        context_ms = x_denormalize(batch["x_hourly"], norm_stats)[0].cpu()
         current_ms = x_denormalize(batch["current_hourly"], norm_stats)[0].cpu()
         repeat_ms = repeat_current_hour(current_ms.unsqueeze(0), target_steps=target_ms.shape[0])[0].cpu()
 
@@ -408,7 +413,7 @@ def plot_one_sample(
         f"{label}, {split} local_index={local_index}, sample_index={item['sample_index']}, "
         f"station={item.get('station_id', 'unknown')}, T={item.get('target_time_start', 'unknown')}"
     )
-    from src.visualization.plot_samples import plot_sample_timeseries
+    from src.visualization.plot_samples import plot_sample_timeseries, plot_sample_with_hourly_context
 
     plot_sample_timeseries(
         target=target_ms,
@@ -417,6 +422,17 @@ def plot_one_sample(
         y_mask=item["y_mask"],
         height_values=[float(v) for v in item["height_values"]],
         output_path=output_path,
+        title=title,
+    )
+    plot_sample_with_hourly_context(
+        context=context_ms,
+        target=target_ms,
+        pred=pred_ms,
+        repeat=repeat_ms,
+        x_mask=item["x_mask"],
+        y_mask=item["y_mask"],
+        height_values=[float(v) for v in item["height_values"]],
+        output_path=context_output_path,
         title=title,
     )
 

@@ -51,6 +51,7 @@ def audit_raw_config(config_path: str | Path) -> list[str]:
             _check_time_axis(target_ds, config, pair.target_path, config.target_frequency_seconds)
 
             station_alt_name = config.variables.get("station_altitude")
+            station_height_name = config.variables.get("station_height")
             height_cfg = _height_config_for_source(config, "paris_nc")
             for hourly_idx, station_id in enumerate(hourly_ids):
                 if station_id not in target_index_by_station:
@@ -58,15 +59,24 @@ def audit_raw_config(config_path: str | Path) -> list[str]:
                 target_idx = target_index_by_station[station_id]
                 station_alt = _station_value(hourly_ds, station_alt_name, hourly_idx, 0.0)
                 target_alt = _station_value(target_ds, station_alt_name, target_idx, station_alt)
+                station_height = _station_value(hourly_ds, station_height_name, hourly_idx, 0.0)
+                target_station_height = _station_value(
+                    target_ds,
+                    station_height_name,
+                    target_idx,
+                    station_height,
+                )
                 hourly_meta = select_height_indices(
                     _height_values_for_station(hourly_ds, config, hourly_idx),
                     station_alt,
                     height_cfg,
+                    station_height=station_height,
                 )
                 target_meta = select_height_indices(
                     _height_values_for_station(target_ds, config, target_idx),
                     target_alt,
                     height_cfg,
+                    station_height=target_station_height,
                 )
                 _validate_hourly_target_height_match(
                     station_id,

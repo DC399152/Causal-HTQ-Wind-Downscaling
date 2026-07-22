@@ -1,21 +1,19 @@
-dataset_name: ds_paris_1h_to_10min_6h_causal_start_v1
+dataset_name: paris_dufeng_1h_to_10min_12h_strict_agl
 
 paths:
   raw_dir: data/raw
   raw_3600s_dir: data/raw
   raw_600s_dir: data/raw
   processed_dir: data/processed
-  dataset_dir: data/datasets/ds_paris_1h_to_10min_6h_causal_start_v1
+  dataset_dir: data/datasets/paris_dufeng_1h_to_10min_12h_strict_agl
 
 time:
   timestamp_semantics: start
-  # Output dataset timestamps are always interval starts. Keep this as "start"
-  # unless inspect_raw_nc.py confirms raw files are truly encoded as interval end.
   raw_timestamp_semantics: start
   input_frequency_seconds: 3600
   target_frequency_seconds: 600
   target_steps_per_hour: 6
-  context_hours: 6
+  context_hours: 12
   causal_context: true
   context_alignment: causal_last
   target_offsets_minutes: [0, 10, 20, 30, 40, 50]
@@ -25,8 +23,27 @@ data_alignment:
   max_hourly_target_height_diff_m: 2.0
   height_schema_policy: error
 
+sources:
+  paris_nc:
+    enabled: true
+    source_label: paris_nc
+    include_station_ids: [PAARBO, PACHEM, PALUPD, PASIRT]
+    exclude_station_ids: [PAJUSS, PAROIS]
+    exclusion_reasons:
+      PAJUSS: selected strict AGL layers fall inside the instrument blind zone
+      PAROIS: selected strict AGL layers fall inside the instrument blind zone
+
+  standard_csv:
+    dufeng_standard_csv:
+      enabled: true
+      source_label: dufeng
+      hourly_csv: data/processed/dufeng/dufeng_1h_standard.csv
+      target_csv: data/processed/dufeng/dufeng_10min_standard.csv
+      include_station_ids:
+        - dufeng_site_a
+      exclude_station_ids: []
+
 variables:
-  # TODO: Verify with scripts/inspect_raw_nc.py before production runs.
   time: time
   height: altitude
   station: station
@@ -39,10 +56,23 @@ variables:
   qc_flags: []
 
 height_selection:
-  # TODO: Verify altitude convention and station altitude reference with inspect_raw_nc.py.
-  selected_heights_agl: [250, 275, 300, 325, 350, 375]
-  height_reference: agl_rounded_station_altitude
+  # Common target heights are strict height above local street/ground level.
+  selected_heights_agl: [175, 200, 225, 250, 275, 300]
+  height_reference: ground_agl_from_asl
   max_height_diff: 12.5
+
+  by_source:
+    paris_nc:
+      selected_heights_agl: [175, 200, 225, 250, 275, 300]
+      height_reference: ground_agl_from_asl
+      max_height_diff: 12.5
+
+    dufeng_standard_csv:
+      # CSV height is above the instrument; the instrument is 10 m AGL.
+      selected_heights_agl: [175, 200, 225, 250, 275, 300]
+      height_reference: instrument_relative_to_ground_agl
+      instrument_height_agl_m: 10.0
+      max_height_diff: 5.0
 
 features:
   input_channels:
@@ -55,7 +85,7 @@ features:
 meteo:
   enabled: true
   source: era5
-  pressure_dir: data/ERA5_paris_humidity_tem/ERA5/ERA5_pressure
+  pressure_dir: data/ERA5
   interpolation: bilinear
   out_of_bounds: nearest
   variables:
@@ -70,7 +100,7 @@ meteo:
 
 static_features:
   use_lcz: true
-  lcz_feature_csv: data/processed/static/station_lcz_features_500m.csv
+  lcz_feature_csv: data/processed/static/station_lcz_features_paris+dufeng_500m.csv
   station_id_column: station_id
   dominant_lcz_column: dominant_lcz_500m
   feature_columns:
@@ -112,7 +142,10 @@ splits:
   split_gap_hours: 24
   split_by_unique_time: true
   split_time_key: target_time_start
+  split_within_source: true
+  split_within_station: true
 
 output:
   format: npz
   save_metadata: true
+  expected_station_ids: [PAARBO, PACHEM, PALUPD, PASIRT, dufeng_site_a]
