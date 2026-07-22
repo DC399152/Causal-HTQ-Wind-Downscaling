@@ -4,7 +4,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from scripts.train import load_best_checkpoint_for_test, validate_monitor_value
+from scripts.train import load_best_checkpoint_for_test, validate_monitor_value, write_metrics_json
 
 
 def test_load_best_checkpoint_for_test_restores_best_epoch_state(tmp_path):
@@ -46,3 +46,20 @@ def test_validate_monitor_value_rejects_non_finite(value):
 
 def test_validate_monitor_value_accepts_finite():
     validate_monitor_value("MAE_ms", 0.5)
+
+
+def test_write_metrics_json_incrementally_replaces_history(tmp_path):
+    import json
+
+    path = tmp_path / "metrics.json"
+    summary = {"status": "running", "history": [{"epoch": 1, "train_loss_norm_total": 1.0}]}
+    write_metrics_json(path, summary)
+
+    summary["history"].append({"epoch": 2, "train_loss_norm_total": 0.5})
+    summary["status"] = "interrupted"
+    write_metrics_json(path, summary)
+
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["status"] == "interrupted"
+    assert [row["epoch"] for row in saved["history"]] == [1, 2]
+    assert not path.with_suffix(".json.tmp").exists()

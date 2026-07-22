@@ -84,8 +84,14 @@ def test_default_training_loss_config_is_residual_physics_without_zero_mean():
         "temporal_weighted",
         "roughness",
         "amplitude",
+        "gradient_amplitude",
+        "residual_corr",
+        "temporal_gradient_corr",
         "vertical",
         "consistency",
         "mean_extreme_weight",
         "max_extreme_weight",
     } <= set(parts)
+    assert config["lambda_gradient_amplitude"] == 0.0
+    assert config["lambda_residual_corr"] == 0.0
+    assert config["lambda_temporal_gradient_corr"] == 0.0

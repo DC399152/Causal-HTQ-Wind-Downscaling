@@ -3,8 +3,11 @@ import torch
 from scripts.train import default_loss_config, compute_loss_parts
 from src.training.losses import (
     masked_mse_loss,
+    masked_temporal_correlation_loss,
     residual_amplitude_loss,
     residual_physics_loss,
+    temporal_gradient_amplitude_loss,
+    temporal_gradient_correlation_loss,
     vertical_shear_loss,
 )
 
@@ -40,6 +43,9 @@ def test_residual_physics_loss_forward_and_keys():
         "temporal_weighted",
         "roughness",
         "amplitude",
+        "gradient_amplitude",
+        "residual_corr",
+        "temporal_gradient_corr",
         "vertical",
         "consistency",
         "mean_extreme_weight",
@@ -216,6 +222,71 @@ def test_residual_amplitude_loss_uses_only_positions_with_two_valid_times():
 
     assert torch.isfinite(loss)
     assert loss > 0
+
+
+def test_fluctuation_losses_penalize_flat_prediction_and_accept_perfect_shape():
+    true_residual = torch.tensor(
+        [[[[0.0, 0.0]], [[1.0, -1.0]], [[-1.0, 1.0]], [[2.0, -2.0]], [[0.0, 0.0]], [[-2.0, 2.0]]]]
+    )
+    flat = torch.zeros_like(true_residual)
+    mask = torch.ones_like(true_residual, dtype=torch.bool)
+
+    assert masked_temporal_correlation_loss(flat, true_residual, mask) > 0.9
+    assert temporal_gradient_correlation_loss(flat, true_residual, mask) > 0.9
+    assert temporal_gradient_amplitude_loss(flat, true_residual, mask) > 0
+    assert masked_temporal_correlation_loss(true_residual, true_residual, mask) < 1e-6
+    assert temporal_gradient_correlation_loss(true_residual, true_residual, mask) < 1e-6
+    assert temporal_gradient_amplitude_loss(true_residual, true_residual, mask) < 1e-6
+
+
+def test_fluctuation_losses_are_mask_aware_and_finite_with_flat_targets():
+    pred = torch.randn(2, 6, 2, 2)
+    target = torch.zeros_like(pred)
+    mask = torch.ones_like(pred, dtype=torch.bool)
+    mask[:, :4, 0, :] = False
+
+    residual_corr = masked_temporal_correlation_loss(pred, target, mask)
+    temporal_corr = temporal_gradient_correlation_loss(pred, target, mask)
+    gradient_amplitude = temporal_gradient_amplitude_loss(pred, target, mask)
+
+    assert torch.isfinite(residual_corr)
+    assert torch.isfinite(temporal_corr)
+    assert torch.isfinite(gradient_amplitude)
+    assert residual_corr == 0
+    assert temporal_corr == 0
+
+
+def test_fluctuation_focused_total_loss_backpropagates_from_flat_prediction():
+    residual = torch.zeros(1, 6, 1, 2, requires_grad=True)
+    current = torch.zeros(1, 1, 2)
+    target = torch.tensor(
+        [[[[0.0, 0.0]], [[1.0, -1.0]], [[-1.0, 1.0]], [[2.0, -2.0]], [[0.0, 0.0]], [[-2.0, 2.0]]]]
+    )
+    mask = torch.ones_like(target, dtype=torch.bool)
+    parts = residual_physics_loss(
+        current.unsqueeze(1) + residual,
+        residual,
+        target,
+        mask,
+        current,
+        lambda_wind=0.0,
+        lambda_extreme=0.0,
+        lambda_temporal=0.0,
+        lambda_roughness=0.0,
+        lambda_vertical=0.0,
+        lambda_consistency=0.0,
+        lambda_gradient_amplitude=0.05,
+        lambda_residual_corr=0.05,
+        lambda_temporal_gradient_corr=0.05,
+        y_mean=[0.0, 0.0],
+        y_std=[1.0, 1.0],
+    )
+
+    parts["loss"].backward()
+
+    assert torch.isfinite(parts["loss"])
+    assert torch.isfinite(residual.grad).all()
+    assert residual.grad.abs().sum() > 0
 
 
 def test_masked_mse_loss_alias():

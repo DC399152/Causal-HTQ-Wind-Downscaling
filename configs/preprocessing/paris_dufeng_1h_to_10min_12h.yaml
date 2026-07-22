@@ -33,6 +33,7 @@ sources:
     dufeng_standard_csv:
       enabled: true
       source_label: dufeng
+      # These canonical CSV timestamps are converted from Asia/Shanghai to UTC.
       hourly_csv: data/processed/dufeng/dufeng_1h_standard.csv
       target_csv: data/processed/dufeng/dufeng_10min_standard.csv
       include_station_ids:
@@ -140,9 +141,9 @@ splits:
   split_gap_hours: 24
   split_by_unique_time: true
   split_time_key: target_time_start
-  # Split Paris and Dufeng independently, then merge train/val/test indices.
-  # This prevents a short/new source from landing entirely in one global split.
+  # Split every station independently in chronological order, then merge labels.
   split_within_source: true
+  split_within_station: true
 
 output:
   format: npz

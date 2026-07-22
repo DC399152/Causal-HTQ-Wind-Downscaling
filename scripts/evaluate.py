@@ -115,6 +115,9 @@ def main() -> None:
             "lambda_temporal_weighted": float(loss_config["lambda_temporal_weighted"]),
             "lambda_roughness": float(loss_config["lambda_roughness"]),
             "lambda_amplitude": float(loss_config["lambda_amplitude"]),
+            "lambda_gradient_amplitude": float(loss_config["lambda_gradient_amplitude"]),
+            "lambda_residual_corr": float(loss_config["lambda_residual_corr"]),
+            "lambda_temporal_gradient_corr": float(loss_config["lambda_temporal_gradient_corr"]),
             "lambda_vertical": float(loss_config["lambda_vertical"]),
             "lambda_consistency": float(loss_config["lambda_consistency"]),
         },
@@ -136,6 +139,9 @@ def main() -> None:
         f"lambda_temporal_weighted={loss_config['lambda_temporal_weighted']}, "
         f"lambda_roughness={loss_config['lambda_roughness']}, "
         f"lambda_amplitude={loss_config['lambda_amplitude']}, "
+        f"lambda_gradient_amplitude={loss_config['lambda_gradient_amplitude']}, "
+        f"lambda_residual_corr={loss_config['lambda_residual_corr']}, "
+        f"lambda_temporal_gradient_corr={loss_config['lambda_temporal_gradient_corr']}, "
         f"lambda_vertical={loss_config['lambda_vertical']})"
     )
     print("metrics: denormalized physical m/s")

@@ -107,6 +107,7 @@ class PreprocessingConfig:
     quality: QualityControlConfig
     splits: SplitConfig
     split_within_source: bool
+    split_within_station: bool
     output_format: str
 
 
@@ -239,6 +240,7 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             split_time_key=str(split.get("split_time_key", "target_time_start")),
         ),
         split_within_source=bool(split.get("split_within_source", False)),
+        split_within_station=bool(split.get("split_within_station", False)),
         output_format=str(output.get("format", "npz")),
     )
 

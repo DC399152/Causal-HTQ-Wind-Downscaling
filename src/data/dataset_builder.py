@@ -963,17 +963,24 @@ def _split_labels_for_times(target_time_start: list[str], config: PreprocessingC
 def _split_labels(
     target_time_start: list[str],
     source_group: list[str],
+    station_id: list[str],
     config: PreprocessingConfig,
 ) -> np.ndarray:
-    """Create split labels globally or independently within each source group."""
+    """Create split labels globally, by source, or by station."""
 
-    if not config.split_within_source:
+    if not config.split_within_source and not config.split_within_station:
         return _split_labels_for_times(target_time_start, config)
 
     labels = np.full((len(target_time_start),), "gap", dtype=object)
-    groups = np.asarray(source_group, dtype=object)
+    if config.split_within_station:
+        groups = np.asarray(
+            [f"{source}\0{station}" for source, station in zip(source_group, station_id)],
+            dtype=object,
+        )
+    else:
+        groups = np.asarray(source_group, dtype=object)
     times = np.asarray(target_time_start, dtype=object)
-    for group in sorted(set(source_group)):
+    for group in sorted(set(groups.tolist())):
         indices = np.where(groups == group)[0]
         group_labels = _split_labels_for_times(times[indices].tolist(), config)
         labels[indices] = group_labels
@@ -983,7 +990,7 @@ def _split_labels(
 def _arrays_from_accumulator(acc: SampleAccumulator, config: PreprocessingConfig) -> dict[str, np.ndarray]:
     if len(acc) == 0:
         return _empty_arrays(config)
-    split = _split_labels(acc.target_time_start, acc.source_group, config)
+    split = _split_labels(acc.target_time_start, acc.source_group, acc.station_id, config)
     arrays = {
         # x_hourly: [N, L=6, H=6, C=2]
         "x_hourly": np.stack(acc.x_hourly).astype(np.float32),
@@ -1122,6 +1129,7 @@ def _write_dataset(
             "test_ratio": config.splits.test_ratio,
             "split_gap_hours": config.splits.split_gap_hours,
             "split_within_source": config.split_within_source,
+            "split_within_station": config.split_within_station,
             "gap_label": "gap",
         },
         "split_counts": {

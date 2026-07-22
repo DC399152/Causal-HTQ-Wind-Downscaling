@@ -1,0 +1,56 @@
+{
+  "dataset_dir": "data/datasets/paris_dufeng_1h_to_10min_12h",
+  "baseline": "repeat_current_hour",
+  "normalize": false,
+  "metric_space": "physical_m_per_s",
+  "splits": {
+    "train": {
+      "samples": 33161.0,
+      "MAE_ms": 0.7383837781922489,
+      "RMSE_ms": 1.1315051417036226,
+      "u_MAE_ms": 0.768705288320422,
+      "v_MAE_ms": 0.7080622799733044,
+      "speed_MAE_ms": 0.7043836153331362,
+      "residual_ACC": NaN,
+      "temporal_gradient_MAE_ms": 0.9640371061831475,
+      "temporal_gradient_ACC": NaN,
+      "valid_target_values": 2378014.0,
+      "valid_speed_values": 1189007.0,
+      "valid_temporal_gradients": 1975244.0,
+      "valid_residual_acc_series": 0.0,
+      "valid_temporal_gradient_acc_series": 0.0
+    },
+    "val": {
+      "samples": 4142.0,
+      "MAE_ms": 0.7432250050446564,
+      "RMSE_ms": 1.1446639474877902,
+      "u_MAE_ms": 0.7849666275563105,
+      "v_MAE_ms": 0.701483430279424,
+      "speed_MAE_ms": 0.7372683977499516,
+      "residual_ACC": NaN,
+      "temporal_gradient_MAE_ms": 0.9533950930187132,
+      "temporal_gradient_ACC": NaN,
+      "valid_target_values": 296570.0,
+      "valid_speed_values": 148285.0,
+      "valid_temporal_gradients": 246056.0,
+      "valid_residual_acc_series": 0.0,
+      "valid_temporal_gradient_acc_series": 0.0
+    },
+    "test": {
+      "samples": 3893.0,
+      "MAE_ms": 0.6867934701008503,
+      "RMSE_ms": 1.025908233842528,
+      "u_MAE_ms": 0.7117165281328776,
+      "v_MAE_ms": 0.6618704155755578,
+      "speed_MAE_ms": 0.6811161823015043,
+      "residual_ACC": NaN,
+      "temporal_gradient_MAE_ms": 0.8888929023446287,
+      "temporal_gradient_ACC": NaN,
+      "valid_target_values": 278482.0,
+      "valid_speed_values": 139241.0,
+      "valid_temporal_gradients": 231156.0,
+      "valid_residual_acc_series": 0.0,
+      "valid_temporal_gradient_acc_series": 0.0
+    }
+  }
+}

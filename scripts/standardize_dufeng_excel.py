@@ -14,7 +14,7 @@ The output schema is intentionally shared with the rest of the project:
 station_id, time_start, height, u, v, u_mask, v_mask, latitude, longitude,
 source_file, source_frequency.
 
-Timestamp convention: interval start.
+Timestamp convention: interval start in UTC (stored timezone-naive).
 """
 
 from __future__ import annotations
@@ -142,14 +142,23 @@ def _read_excel(path: Path):
     return pd.read_excel(path, sheet_name=0, engine="openpyxl")
 
 
-def _wide_excel_to_long(path: Path, frequency_label: str, file_meta: dict[str, Any]):
+def _source_times_to_utc_naive(values, source_timezone: str):
+    """Interpret source timestamps in their local timezone and return UTC-naive values."""
+    pd = _require_pandas()
+    times = pd.to_datetime(values, errors="coerce")
+    if times.dt.tz is None:
+        times = times.dt.tz_localize(source_timezone, ambiguous="raise", nonexistent="raise")
+    return times.dt.tz_convert("UTC").dt.tz_localize(None)
+
+
+def _wide_excel_to_long(path: Path, frequency_label: str, file_meta: dict[str, Any], source_timezone: str):
     pd = _require_pandas()
     np = _require_numpy()
     raw = _read_excel(path)
     if "time" not in raw.columns:
         raise KeyError(f"{path.name} has no 'time' column")
 
-    times = pd.to_datetime(raw["time"], errors="coerce")
+    times = _source_times_to_utc_naive(raw["time"], source_timezone)
     heights = _extract_heights(raw.columns)
     if not heights:
         raise ValueError(f"{path.name} has no matched WS_*_MEAN / WD_*_MEAN height columns")
@@ -289,6 +298,9 @@ def _make_report(tenmin, hourly, station_coords: dict[str, dict[str, float]], ar
 
     return {
         "timestamp_semantics": "interval_start",
+        "source_timezone": args.source_timezone,
+        "output_timezone": "UTC",
+        "output_timezone_storage": "timezone_naive",
         "wind_direction_convention": "meteorological_from_direction_degrees",
         "uv_formula": "u = -ws * sin(wd_rad); v = -ws * cos(wd_rad)",
         "source_raw_dir": args.raw_dir,
@@ -309,6 +321,7 @@ def main() -> None:
     parser.add_argument("--location-audit", default="data/processed/dufeng/dufeng_location_audit.csv")
     parser.add_argument("--min-valid-fraction-10min", type=float, default=0.8)
     parser.add_argument("--min-valid-fraction-1h", type=float, default=0.8)
+    parser.add_argument("--source-timezone", default="Asia/Shanghai")
     parser.add_argument("--tenmin-output", default="dufeng_10min_standard.csv")
     parser.add_argument("--hourly-output", default="dufeng_1h_standard.csv")
     parser.add_argument("--report-output", default="dufeng_standardization_report.json")
@@ -338,7 +351,7 @@ def main() -> None:
         frequency = str(row["frequency_label"])
         print(f"standardize: {source_file} ({frequency})")
         try:
-            long = _wide_excel_to_long(path, frequency, file_meta[source_file])
+            long = _wide_excel_to_long(path, frequency, file_meta[source_file], args.source_timezone)
             if frequency == "1min":
                 aggregated = _aggregate_to_rule(
                     long,

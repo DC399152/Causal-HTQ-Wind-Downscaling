@@ -8,6 +8,7 @@ xr = pytest.importorskip("xarray")
 
 from src.data.dataset_builder import (
     _load_pair_into_station_series,
+    _split_labels,
     _validate_arrays_before_write,
 )
 from src.data.preprocessing import DataAlignmentConfig, HeightSelectionConfig, parse_preprocessing_config
@@ -178,3 +179,26 @@ def test_global_validation_rejects_duplicate_station_target_time():
 
     with pytest.raises(ValueError, match="Duplicate station_id"):
         _validate_arrays_before_write(arrays, replace(cfg, context_hours=6),)
+
+
+def test_station_chronological_split_is_independent_per_station():
+    cfg = _config(selected=(25.0,))
+    cfg = replace(
+        cfg,
+        splits=replace(cfg.splits, split_gap_hours=0),
+        split_within_station=True,
+    )
+    a_times = [f"2024-01-01T{hour:02d}:00" for hour in range(10)]
+    b_times = [f"2024-02-01T{hour:02d}:00" for hour in range(10)]
+
+    labels = _split_labels(
+        a_times + b_times,
+        ["paris_nc"] * 20,
+        ["A"] * 10 + ["B"] * 10,
+        cfg,
+    )
+
+    for station_labels in (labels[:10], labels[10:]):
+        assert station_labels.tolist().count("train") == 8
+        assert station_labels.tolist().count("val") == 1
+        assert station_labels.tolist().count("test") == 1

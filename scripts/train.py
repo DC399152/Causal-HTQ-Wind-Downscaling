@@ -169,6 +169,9 @@ def compute_loss_parts(outputs: dict[str, Any], batch: dict[str, Any], loss_conf
         lambda_temporal_weighted=float(loss_config["lambda_temporal_weighted"]),
         lambda_roughness=float(loss_config["lambda_roughness"]),
         lambda_amplitude=float(loss_config["lambda_amplitude"]),
+        lambda_gradient_amplitude=float(loss_config["lambda_gradient_amplitude"]),
+        lambda_residual_corr=float(loss_config["lambda_residual_corr"]),
+        lambda_temporal_gradient_corr=float(loss_config["lambda_temporal_gradient_corr"]),
         lambda_vertical=float(loss_config["lambda_vertical"]),
         lambda_consistency=float(loss_config["lambda_consistency"]),
         extreme_beta=float(loss_config["extreme_beta"]),
@@ -352,6 +355,9 @@ def default_loss_config() -> dict[str, float | str]:
         "lambda_temporal_weighted": 0.0,
         "lambda_roughness": 0.1,
         "lambda_amplitude": 0.0,
+        "lambda_gradient_amplitude": 0.0,
+        "lambda_residual_corr": 0.0,
+        "lambda_temporal_gradient_corr": 0.0,
         "amplitude_eps": 1e-4,
         "lambda_consistency": 0.1,
         "extreme_beta": 1.0,
@@ -380,7 +386,11 @@ def describe_loss_type(loss_config: dict[str, float | str]) -> str:
             "lambda_temporal*residual_temporal_l1 + "
             "lambda_temporal_weighted*residual_temporal_weighted_l1 + "
             "lambda_roughness*residual_second_order_l1 + lambda_vertical*vertical_shear_l1 + "
-            "lambda_amplitude*residual_amplitude_l1 + lambda_consistency*hourly_consistency_l1"
+            "lambda_amplitude*residual_amplitude_l1 + "
+            "lambda_gradient_amplitude*residual_gradient_amplitude_smooth_l1 + "
+            "lambda_residual_corr*residual_correlation_loss + "
+            "lambda_temporal_gradient_corr*temporal_gradient_correlation_loss + "
+            "lambda_consistency*hourly_consistency_l1"
         )
     return f"unsupported loss type: {loss_type}"
 
@@ -420,6 +430,15 @@ def loss_config_from_config(config: dict[str, Any], args: argparse.Namespace) ->
         ),
         "lambda_roughness": float(loss_cfg.get("lambda_roughness", defaults["lambda_roughness"])),
         "lambda_amplitude": float(loss_cfg.get("lambda_amplitude", defaults["lambda_amplitude"])),
+        "lambda_gradient_amplitude": float(
+            loss_cfg.get("lambda_gradient_amplitude", defaults["lambda_gradient_amplitude"])
+        ),
+        "lambda_residual_corr": float(
+            loss_cfg.get("lambda_residual_corr", defaults["lambda_residual_corr"])
+        ),
+        "lambda_temporal_gradient_corr": float(
+            loss_cfg.get("lambda_temporal_gradient_corr", defaults["lambda_temporal_gradient_corr"])
+        ),
         "amplitude_eps": float(loss_cfg.get("amplitude_eps", defaults["amplitude_eps"])),
         "lambda_vertical": args.lambda_vertical
         if args.lambda_vertical is not None
@@ -507,8 +526,14 @@ def save_checkpoint(
             "loss_weights": {
                 "lambda_wind": float(loss_config["lambda_wind"]),
                 "lambda_extreme": float(loss_config["lambda_extreme"]),
+                "lambda_residual_weighted": float(loss_config["lambda_residual_weighted"]),
                 "lambda_temporal": float(loss_config["lambda_temporal"]),
+                "lambda_temporal_weighted": float(loss_config["lambda_temporal_weighted"]),
                 "lambda_roughness": float(loss_config["lambda_roughness"]),
+                "lambda_amplitude": float(loss_config["lambda_amplitude"]),
+                "lambda_gradient_amplitude": float(loss_config["lambda_gradient_amplitude"]),
+                "lambda_residual_corr": float(loss_config["lambda_residual_corr"]),
+                "lambda_temporal_gradient_corr": float(loss_config["lambda_temporal_gradient_corr"]),
                 "lambda_vertical": float(loss_config["lambda_vertical"]),
                 "lambda_consistency": float(loss_config["lambda_consistency"]),
             },
@@ -516,6 +541,17 @@ def save_checkpoint(
         },
         path,
     )
+
+
+def write_metrics_json(path: str | Path, summary: dict[str, Any]) -> None:
+    """Atomically persist training history so interruptions do not lose completed epochs."""
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(path.suffix + ".tmp")
+    with temporary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2)
+    temporary_path.replace(path)
 
 
 def validate_monitor_value(monitor_name: str, monitor_value: float) -> None:
@@ -680,6 +716,9 @@ def main() -> None:
         f"lambda_temporal_weighted={loss_config['lambda_temporal_weighted']}, "
         f"lambda_roughness={loss_config['lambda_roughness']}, "
         f"lambda_amplitude={loss_config['lambda_amplitude']}, "
+        f"lambda_gradient_amplitude={loss_config['lambda_gradient_amplitude']}, "
+        f"lambda_residual_corr={loss_config['lambda_residual_corr']}, "
+        f"lambda_temporal_gradient_corr={loss_config['lambda_temporal_gradient_corr']}, "
         f"lambda_vertical={loss_config['lambda_vertical']})"
     )
     print("val/test metrics: denormalized physical m/s")
@@ -699,78 +738,147 @@ def main() -> None:
     named_checkpoint_best_values: dict[str, float] = {}
     named_checkpoint_best_epochs: dict[str, int] = {}
     history: list[dict[str, Any]] = []
-    for epoch in range(1, max_epochs + 1):
-        train_metrics = train_one_epoch(
-            model,
-            train_loader,
-            optimizer,
-            device,
-            loss_config,
-            gradient_clip_norm=gradient_clip_norm,
-            scheduler=scheduler,
-            limit_batches=args.limit_train_batches,
-        )
-        val_metrics = evaluate(
-            model,
-            val_loader,
-            norm_stats,
-            device,
-            loss_config=loss_config,
-            limit_batches=args.limit_eval_batches,
-        )
-        row = {"epoch": epoch, **train_metrics, **{f"val_{k}": v for k, v in val_metrics.items()}}
-        history.append(row)
-        print(
-            f"epoch {epoch:03d} "
-            f"train_loss_norm_total={row['train_loss_norm_total']:.6g} "
-            f"val_loss_norm_total={row['val_loss_norm_total']:.6g} "
-            f"val_MAE_ms={row['val_MAE_ms']:.6g} "
-            f"val_RMSE_ms={row['val_RMSE_ms']:.6g} "
-            f"val_residual_ACC={row['val_residual_ACC']:.6g}"
-        )
+    summary = {
+        "status": "running",
+        "config": str(args.config),
+        "dataset_dir": str(dataset_dir),
+        "run_dir": str(run_dir),
+        "seed": seed,
+        "batch_size": batch_size,
+        "max_epochs": max_epochs,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "gradient_clip_norm": gradient_clip_norm,
+        "scheduler": scheduler_info,
+        "num_workers": num_workers,
+        "loss_config": loss_config,
+        "loss_weights": {
+            "lambda_wind": float(loss_config["lambda_wind"]),
+            "lambda_extreme": float(loss_config["lambda_extreme"]),
+            "lambda_residual_weighted": float(loss_config["lambda_residual_weighted"]),
+            "lambda_temporal": float(loss_config["lambda_temporal"]),
+            "lambda_temporal_weighted": float(loss_config["lambda_temporal_weighted"]),
+            "lambda_roughness": float(loss_config["lambda_roughness"]),
+            "lambda_amplitude": float(loss_config["lambda_amplitude"]),
+            "lambda_gradient_amplitude": float(loss_config["lambda_gradient_amplitude"]),
+            "lambda_residual_corr": float(loss_config["lambda_residual_corr"]),
+            "lambda_temporal_gradient_corr": float(loss_config["lambda_temporal_gradient_corr"]),
+            "lambda_vertical": float(loss_config["lambda_vertical"]),
+            "lambda_consistency": float(loss_config["lambda_consistency"]),
+        },
+        "model_config": model_config.__dict__,
+        "early_stopping": {},
+        "history": history,
+        "checkpoint_selection": {},
+        "test": None,
+        "test_checkpoint": None,
+        "test_checkpoint_epoch": None,
+        "loss_space": "normalized",
+        "loss_type": describe_loss_type(loss_config),
+        "metric_space": "physical_m_per_s",
+    }
 
-        save_checkpoint(run_dir / "last.pt", model, optimizer, epoch, row, model_config, loss_config)
-        maybe_save_named_checkpoints(
-            run_dir,
-            model,
-            optimizer,
-            epoch,
-            row,
-            model_config,
-            loss_config,
-            named_checkpoint_best_values,
-            named_checkpoint_best_epochs,
-        )
-        monitor_name = str(early_stopping["monitor"])
-        if monitor_name not in val_metrics:
-            raise KeyError(f"Validation metric {monitor_name!r} is not available")
-        monitor_value = float(val_metrics[monitor_name])
-        validate_monitor_value(monitor_name, monitor_value)
-        improved = monitor_value < best_monitor - float(early_stopping["min_delta"])
-        if improved:
-            best_monitor = monitor_value
-            best_epoch = epoch
-            epochs_without_improvement = 0
-            save_checkpoint(run_dir / "best.pt", model, optimizer, epoch, row, model_config, loss_config)
-        else:
-            epochs_without_improvement += 1
+    def persist_summary(status: str) -> None:
+        summary["status"] = status
+        summary["completed_epochs"] = len(history)
+        summary["early_stopping"] = {
+            **early_stopping,
+            "stopped_early": stopped_early,
+            "stop_reason": stop_reason,
+            "best_epoch": best_epoch,
+            "best_monitor_value": best_monitor if math.isfinite(best_monitor) else None,
+        }
+        summary["checkpoint_selection"] = {
+            name: {
+                "path": str(run_dir / name),
+                "epoch": int(named_checkpoint_best_epochs[name]),
+                "metric_value": float(named_checkpoint_best_values[name]),
+            }
+            for name in sorted(named_checkpoint_best_values)
+        }
+        write_metrics_json(run_dir / "metrics.json", summary)
 
-        row["early_stopping_monitor"] = monitor_name
-        row["early_stopping_monitor_value"] = monitor_value
-        row["best_epoch"] = best_epoch
-        row["epochs_without_improvement"] = epochs_without_improvement
-
-        if (
-            early_stopping["enabled"]
-            and epochs_without_improvement >= int(early_stopping["patience"])
-        ):
-            stopped_early = True
-            stop_reason = (
-                f"val_{monitor_name} did not improve by "
-                f"{early_stopping['min_delta']} for {early_stopping['patience']} epochs"
+    try:
+        for epoch in range(1, max_epochs + 1):
+            train_metrics = train_one_epoch(
+                model,
+                train_loader,
+                optimizer,
+                device,
+                loss_config,
+                gradient_clip_norm=gradient_clip_norm,
+                scheduler=scheduler,
+                limit_batches=args.limit_train_batches,
             )
-            print(f"early stopping at epoch {epoch:03d}: {stop_reason}")
-            break
+            val_metrics = evaluate(
+                model,
+                val_loader,
+                norm_stats,
+                device,
+                loss_config=loss_config,
+                limit_batches=args.limit_eval_batches,
+            )
+            row = {"epoch": epoch, **train_metrics, **{f"val_{k}": v for k, v in val_metrics.items()}}
+            history.append(row)
+            print(
+                f"epoch {epoch:03d} "
+                f"train_loss_norm_total={row['train_loss_norm_total']:.6g} "
+                f"val_loss_norm_total={row['val_loss_norm_total']:.6g} "
+                f"val_MAE_ms={row['val_MAE_ms']:.6g} "
+                f"val_RMSE_ms={row['val_RMSE_ms']:.6g} "
+                f"val_residual_ACC={row['val_residual_ACC']:.6g}"
+            )
+
+            save_checkpoint(run_dir / "last.pt", model, optimizer, epoch, row, model_config, loss_config)
+            maybe_save_named_checkpoints(
+                run_dir,
+                model,
+                optimizer,
+                epoch,
+                row,
+                model_config,
+                loss_config,
+                named_checkpoint_best_values,
+                named_checkpoint_best_epochs,
+            )
+            monitor_name = str(early_stopping["monitor"])
+            if monitor_name not in val_metrics:
+                raise KeyError(f"Validation metric {monitor_name!r} is not available")
+            monitor_value = float(val_metrics[monitor_name])
+            validate_monitor_value(monitor_name, monitor_value)
+            improved = monitor_value < best_monitor - float(early_stopping["min_delta"])
+            if improved:
+                best_monitor = monitor_value
+                best_epoch = epoch
+                epochs_without_improvement = 0
+                save_checkpoint(run_dir / "best.pt", model, optimizer, epoch, row, model_config, loss_config)
+            else:
+                epochs_without_improvement += 1
+
+            row["early_stopping_monitor"] = monitor_name
+            row["early_stopping_monitor_value"] = monitor_value
+            row["best_epoch"] = best_epoch
+            row["epochs_without_improvement"] = epochs_without_improvement
+
+            should_stop = (
+                early_stopping["enabled"]
+                and epochs_without_improvement >= int(early_stopping["patience"])
+            )
+            if should_stop:
+                stopped_early = True
+                stop_reason = (
+                    f"val_{monitor_name} did not improve by "
+                    f"{early_stopping['min_delta']} for {early_stopping['patience']} epochs"
+                )
+            persist_summary("stopped_early" if should_stop else "running")
+            if should_stop:
+                print(f"early stopping at epoch {epoch:03d}: {stop_reason}")
+                break
+    except KeyboardInterrupt:
+        stop_reason = "KeyboardInterrupt"
+        persist_summary("interrupted")
+        print(f"training interrupted; saved {len(history)} completed epochs to {run_dir / 'metrics.json'}")
+        return
 
     best_checkpoint_path = run_dir / "best.pt"
     best_checkpoint = load_best_checkpoint_for_test(best_checkpoint_path, model, device)
@@ -794,57 +902,10 @@ def main() -> None:
         f"residual_ACC={test_metrics['residual_ACC']:.6g}"
     )
 
-    run_dir.mkdir(parents=True, exist_ok=True)
-    summary = {
-        "config": str(args.config),
-        "dataset_dir": str(dataset_dir),
-        "run_dir": str(run_dir),
-        "seed": seed,
-        "batch_size": batch_size,
-        "max_epochs": max_epochs,
-        "learning_rate": learning_rate,
-        "weight_decay": weight_decay,
-        "gradient_clip_norm": gradient_clip_norm,
-        "scheduler": scheduler_info,
-        "num_workers": num_workers,
-        "loss_config": loss_config,
-        "loss_weights": {
-            "lambda_wind": float(loss_config["lambda_wind"]),
-            "lambda_extreme": float(loss_config["lambda_extreme"]),
-            "lambda_residual_weighted": float(loss_config["lambda_residual_weighted"]),
-            "lambda_temporal": float(loss_config["lambda_temporal"]),
-            "lambda_temporal_weighted": float(loss_config["lambda_temporal_weighted"]),
-            "lambda_roughness": float(loss_config["lambda_roughness"]),
-            "lambda_amplitude": float(loss_config["lambda_amplitude"]),
-            "lambda_vertical": float(loss_config["lambda_vertical"]),
-            "lambda_consistency": float(loss_config["lambda_consistency"]),
-        },
-        "model_config": model_config.__dict__,
-        "early_stopping": {
-            **early_stopping,
-            "stopped_early": stopped_early,
-            "stop_reason": stop_reason,
-            "best_epoch": best_epoch,
-            "best_monitor_value": best_monitor,
-        },
-        "history": history,
-        "checkpoint_selection": {
-            name: {
-                "path": str(run_dir / name),
-                "epoch": int(named_checkpoint_best_epochs[name]),
-                "metric_value": float(named_checkpoint_best_values[name]),
-            }
-            for name in sorted(named_checkpoint_best_values)
-        },
-        "test": test_metrics,
-        "test_checkpoint": str(best_checkpoint_path),
-        "test_checkpoint_epoch": int(best_checkpoint["epoch"]),
-        "loss_space": "normalized",
-        "loss_type": describe_loss_type(loss_config),
-        "metric_space": "physical_m_per_s",
-    }
-    with (run_dir / "metrics.json").open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
+    summary["test"] = test_metrics
+    summary["test_checkpoint"] = str(best_checkpoint_path)
+    summary["test_checkpoint_epoch"] = int(best_checkpoint["epoch"])
+    persist_summary("completed")
 
 
 if __name__ == "__main__":

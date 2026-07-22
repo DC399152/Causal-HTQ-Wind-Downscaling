@@ -167,6 +167,68 @@ def residual_amplitude_loss(residual_pred, true_residual, mask, eps: float = 1e-
     return masked_l1_loss(pred_std, true_std, amp_mask, eps=eps)
 
 
+def temporal_gradient_amplitude_loss(
+    residual_pred,
+    true_residual,
+    mask,
+    eps: float = 1e-8,
+    amplitude_eps: float = 1e-4,
+):
+    """Match residual-gradient RMS without requiring exact temporal phase."""
+
+    if residual_pred.shape[1] < 2:
+        return _zero_loss_like(residual_pred)
+    dy_pred = residual_pred[:, 1:] - residual_pred[:, :-1]
+    dy_true = true_residual[:, 1:] - true_residual[:, :-1]
+    dy_mask = mask[:, 1:] & mask[:, :-1]
+    valid = dy_mask.to(dtype=residual_pred.dtype)
+    count = valid.sum(dim=1)
+    amp_eps = residual_pred.new_tensor(float(amplitude_eps)).abs().clamp_min(eps)
+    pred_rms = ((dy_pred.pow(2) * valid).sum(dim=1) / count.clamp_min(eps) + amp_eps).sqrt()
+    true_rms = ((dy_true.pow(2) * valid).sum(dim=1) / count.clamp_min(eps) + amp_eps).sqrt()
+    amplitude_mask = count >= 2
+    error = torch.nn.functional.smooth_l1_loss(pred_rms, true_rms, reduction="none")
+    valid_amplitude = amplitude_mask.to(dtype=error.dtype)
+    return (error * valid_amplitude).sum() / valid_amplitude.sum().clamp_min(eps)
+
+
+def masked_temporal_correlation_loss(
+    pred,
+    target,
+    mask,
+    *,
+    min_valid: int = 3,
+    eps: float = 1e-6,
+):
+    """Return ``1 - Pearson correlation`` along time for valid non-flat targets."""
+
+    valid = mask.to(dtype=pred.dtype)
+    count = valid.sum(dim=1)
+    pred_mean = (pred * valid).sum(dim=1) / count.clamp_min(1.0)
+    target_mean = (target * valid).sum(dim=1) / count.clamp_min(1.0)
+    pred_centered = (pred - pred_mean.unsqueeze(1)) * valid
+    target_centered = (target - target_mean.unsqueeze(1)) * valid
+    covariance = (pred_centered * target_centered).sum(dim=1)
+    pred_energy = pred_centered.pow(2).sum(dim=1)
+    target_energy = target_centered.pow(2).sum(dim=1)
+    denominator = (pred_energy * target_energy).clamp_min(eps * eps).sqrt()
+    correlation = (covariance / denominator).clamp(-1.0, 1.0)
+    eligible = (count >= int(min_valid)) & (target_energy > eps)
+    valid_series = eligible.to(dtype=pred.dtype)
+    return ((1.0 - correlation) * valid_series).sum() / valid_series.sum().clamp_min(eps)
+
+
+def temporal_gradient_correlation_loss(residual_pred, true_residual, mask, eps: float = 1e-6):
+    """Correlation loss for adjacent residual changes."""
+
+    if residual_pred.shape[1] < 2:
+        return _zero_loss_like(residual_pred)
+    dy_pred = residual_pred[:, 1:] - residual_pred[:, :-1]
+    dy_true = true_residual[:, 1:] - true_residual[:, :-1]
+    dy_mask = mask[:, 1:] & mask[:, :-1]
+    return masked_temporal_correlation_loss(dy_pred, dy_true, dy_mask, eps=eps)
+
+
 def residual_physics_loss(
     pred_wind,
     residual_pred,
@@ -182,6 +244,9 @@ def residual_physics_loss(
     lambda_temporal_weighted: float = 0.0,
     lambda_roughness: float = 0.1,
     lambda_amplitude: float = 0.0,
+    lambda_gradient_amplitude: float = 0.0,
+    lambda_residual_corr: float = 0.0,
+    lambda_temporal_gradient_corr: float = 0.0,
     lambda_vertical: float = 0.05,
     lambda_consistency: float = 0.1,
     extreme_beta: float = 1.0,
@@ -304,6 +369,15 @@ def residual_physics_loss(
     )
     roughness = second_order_temporal_roughness_loss(residual_pred, true_residual, mask, eps=eps)
     amplitude = residual_amplitude_loss(residual_pred, true_residual, mask, eps=eps, amplitude_eps=amplitude_eps)
+    gradient_amplitude = temporal_gradient_amplitude_loss(
+        residual_pred,
+        true_residual,
+        mask,
+        eps=eps,
+        amplitude_eps=amplitude_eps,
+    )
+    residual_corr = masked_temporal_correlation_loss(residual_pred, true_residual, mask)
+    temporal_gradient_corr = temporal_gradient_correlation_loss(residual_pred, true_residual, mask)
 
     if float(lambda_vertical) == 0.0:
         vertical = _zero_loss_like(pred_wind)
@@ -331,6 +405,9 @@ def residual_physics_loss(
         + lambda_temporal_weighted * temporal_weighted
         + lambda_roughness * roughness
         + lambda_amplitude * amplitude
+        + lambda_gradient_amplitude * gradient_amplitude
+        + lambda_residual_corr * residual_corr
+        + lambda_temporal_gradient_corr * temporal_gradient_corr
         + lambda_vertical * vertical
         + lambda_consistency * consistency
     )
@@ -350,6 +427,9 @@ def residual_physics_loss(
         "temporal_weighted": temporal_weighted,
         "roughness": roughness,
         "amplitude": amplitude,
+        "gradient_amplitude": gradient_amplitude,
+        "residual_corr": residual_corr,
+        "temporal_gradient_corr": temporal_gradient_corr,
         "vertical": vertical,
         "consistency": consistency,
         "mean_extreme_weight": mean_extreme_weight,
