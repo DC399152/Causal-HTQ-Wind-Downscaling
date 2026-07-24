@@ -18,7 +18,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_torch
-from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
+from src.models.htq_encoder_only import EncoderOnlyConfig
+from src.models.htq_transformer import HTQConfig
+from src.models.model_factory import ModelConfig, architecture_from_config, build_model
 from src.training.losses import residual_physics_loss
 from src.training.metrics import (
     add_metric_sums,
@@ -45,8 +47,8 @@ def load_yaml(path: str | Path) -> dict[str, Any]:
         return yaml.safe_load(f) or {}
 
 
-def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> HTQConfig:
-    """Map YAML keys to the HTQConfig dataclass."""
+def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> ModelConfig:
+    """Map YAML keys to the architecture-specific model config."""
 
     data_cfg = config.get("data", {})
     model_cfg = config.get("model", {})
@@ -57,6 +59,60 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> HTQC
     query_cfg = config.get("query_builder", {})
     pressure_levels = tuple(int(v) for v in meteo_cfg.get("pressure_levels_hpa", [1000, 975, 950, 925, 900]))
     trend_scales = tuple(int(v) for v in query_cfg.get("trend_scales", [1, 3, 5]))
+    architecture = str(model_cfg.get("architecture", "htq_encoder_decoder"))
+    if architecture == "htq_target_token_encoder_only":
+        target_cfg = model_cfg.get("target_tokens", {})
+        residual_head_cfg = model_cfg.get("residual_head", {})
+        return EncoderOnlyConfig(
+            architecture=architecture,
+            name=str(model_cfg.get("name", "htq_encoder_only_v1")),
+            d_model=args.d_model or int(model_cfg.get("d_model", 128)),
+            nhead=args.nhead or int(model_cfg.get("n_heads", model_cfg.get("nhead", 8))),
+            num_encoder_layers=args.encoder_layers
+            or int(model_cfg.get("encoder_layers", model_cfg.get("num_encoder_layers", 4))),
+            dim_feedforward=args.dim_feedforward or int(model_cfg.get("dim_feedforward", 512)),
+            dropout=float(model_cfg.get("dropout", 0.1)),
+            activation=str(model_cfg.get("activation", "gelu")),
+            norm_first=bool(model_cfg.get("norm_first", True)),
+            context_hours=int(model_cfg.get("context_hours", data_cfg.get("context_hours", 12))),
+            target_steps=int(model_cfg.get("target_steps", data_cfg.get("target_steps", 6))),
+            height_levels=int(model_cfg.get("height_levels", 6)),
+            input_channels=int(model_cfg.get("input_channels", 2)),
+            output_channels=int(model_cfg.get("output_channels", 2)),
+            include_mask_features=bool(model_cfg.get("include_mask_features", True)),
+            include_delta_features=bool(model_cfg.get("include_delta_features", True)),
+            use_physical_height_embedding=bool(model_cfg.get("use_physical_height_embedding", True)),
+            physical_height_hidden_dim=int(model_cfg.get("physical_height_hidden_dim", 64)),
+            height_center_m=float(model_cfg.get("height_center_m", 300.0)),
+            height_scale_m=float(model_cfg.get("height_scale_m", 100.0)),
+            condition_on_current_height=bool(target_cfg.get("condition_on_current_height", True)),
+            context_gate_init_bias=float(target_cfg.get("context_gate_init_bias", -1.0)),
+            use_block_attention_mask=bool(target_cfg.get("use_block_attention_mask", True)),
+            allow_target_to_target_attention=bool(
+                target_cfg.get("allow_target_to_target_attention", True)
+            ),
+            residual_head_hidden_dim=int(residual_head_cfg.get("hidden_dim", 64)),
+            residual_head_dropout=float(residual_head_cfg.get("dropout", 0.05)),
+            residual_head_final_weight_std=float(
+                residual_head_cfg.get("final_weight_std", 0.001)
+            ),
+            use_meteo=bool(multimodal_cfg.get("use_meteo", model_cfg.get("use_meteo", False))),
+            use_static=bool(multimodal_cfg.get("use_static", model_cfg.get("use_static", False))),
+            meteo_context_hours=int(meteo_cfg.get("context_hours", data_cfg.get("context_hours", 12))),
+            meteo_pressure_levels_hpa=pressure_levels,
+            num_meteo_channels=int(meteo_cfg.get("num_meteo_channels", 2)),
+            meteo_use_delta=bool(meteo_cfg.get("use_delta", True)),
+            meteo_use_mask_channels=bool(meteo_cfg.get("use_mask_channels", False)),
+            fusion_nhead=int(fusion_cfg.get("nhead", model_cfg.get("nhead", 8))),
+            fusion_dropout=float(fusion_cfg.get("dropout", model_cfg.get("dropout", 0.1))),
+            fusion_gate_init_bias=float(fusion_cfg.get("gate_init_bias", -2.0)),
+            static_input_dim=int(static_cfg.get("input_dim", 17)),
+            static_n_tokens=int(static_cfg.get("n_static_tokens", 1)),
+            static_hidden_dim=int(static_cfg.get("hidden_dim", 128)),
+            static_dropout=float(static_cfg.get("dropout", model_cfg.get("dropout", 0.1))),
+        )
+    if architecture != "htq_encoder_decoder":
+        raise ValueError(f"Unknown model architecture {architecture!r}")
     return HTQConfig(
         d_model=args.d_model or int(model_cfg.get("d_model", 64)),
         nhead=args.nhead or int(model_cfg.get("n_heads", model_cfg.get("nhead", 4))),
@@ -142,6 +198,7 @@ def model_forward(model, batch: dict[str, Any]):
         meteo_mask=batch.get("meteo_mask"),
         x_static=batch.get("x_static"),
         current_hourly_reference=batch.get("current_hourly_y_norm"),
+        height_values=batch.get("height_values", batch.get("height")),
     )
 
 
@@ -509,8 +566,10 @@ def save_checkpoint(
     optimizer,
     epoch: int,
     metrics: dict[str, float],
-    model_config: HTQConfig,
+    model_config: ModelConfig,
     loss_config: dict[str, float | str],
+    scheduler=None,
+    norm_stats: dict[str, Any] | None = None,
 ) -> None:
     """Save a compact PyTorch checkpoint."""
 
@@ -518,9 +577,11 @@ def save_checkpoint(
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
+            "architecture": architecture_from_config(model_config),
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
             "metrics": metrics,
             "model_config": model_config.__dict__,
             "loss_weights": {
@@ -538,6 +599,7 @@ def save_checkpoint(
                 "lambda_consistency": float(loss_config["lambda_consistency"]),
             },
             "loss_config": loss_config,
+            "norm_stats": norm_stats,
         },
         path,
     )
@@ -567,10 +629,12 @@ def maybe_save_named_checkpoints(
     optimizer,
     epoch: int,
     row: dict[str, Any],
-    model_config: HTQConfig,
+    model_config: ModelConfig,
     loss_config: dict[str, float | str],
     best_values: dict[str, float],
     best_epochs: dict[str, int],
+    scheduler=None,
+    norm_stats: dict[str, Any] | None = None,
 ) -> None:
     """Save additional validation-best checkpoints without changing early stopping."""
 
@@ -592,7 +656,17 @@ def maybe_save_named_checkpoints(
         if improved:
             best_values[filename] = value
             best_epochs[filename] = epoch
-            save_checkpoint(run_dir / filename, model, optimizer, epoch, row, model_config, loss_config)
+            save_checkpoint(
+                run_dir / filename,
+                model,
+                optimizer,
+                epoch,
+                row,
+                model_config,
+                loss_config,
+                scheduler=scheduler,
+                norm_stats=norm_stats,
+            )
 
 
 def load_best_checkpoint_for_test(best_checkpoint_path: str | Path, model, device) -> dict[str, Any]:
@@ -683,7 +757,14 @@ def main() -> None:
     loss_config = attach_norm_stats_to_loss_config(loss_config, norm_stats)
 
     model_config = build_model_config(config, args)
-    model = CausalHTQTransformer(model_config).to(device)
+    model = build_model(model_config).to(device)
+    architecture = architecture_from_config(model_config)
+    total_params = sum(parameter.numel() for parameter in model.parameters())
+    trainable_params = sum(
+        parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+    )
+    input_token_count = model_config.context_hours * model_config.height_levels
+    target_token_count = model_config.target_steps * model_config.height_levels
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
     train_loader = make_loader(dataset_dir, "train", batch_size, True, num_workers)
@@ -700,6 +781,29 @@ def main() -> None:
     print(f"dataset_dir: {dataset_dir}")
     print(f"run_dir: {run_dir}")
     print(f"device: {device}")
+    print(f"architecture: {architecture}")
+    print(f"total_params: {total_params}")
+    print(f"trainable_params: {trainable_params}")
+    print(f"d_model: {model_config.d_model}")
+    print(f"nhead: {model_config.nhead}")
+    print(f"num_encoder_layers: {model_config.num_encoder_layers}")
+    print(f"input_token_count: {input_token_count}")
+    print(f"target_token_count: {target_token_count}")
+    print(f"total_token_count: {input_token_count + target_token_count}")
+    print(f"use_meteo: {model_config.use_meteo}")
+    print(f"use_static: {model_config.use_static}")
+    print(
+        "use_physical_height_embedding: "
+        f"{getattr(model_config, 'use_physical_height_embedding', False)}"
+    )
+    print(
+        "use_block_attention_mask: "
+        f"{getattr(model_config, 'use_block_attention_mask', False)}"
+    )
+    print(
+        "condition_on_current_height: "
+        f"{getattr(model_config, 'condition_on_current_height', False)}"
+    )
     print(f"epochs: {max_epochs}")
     print(f"batch_size: {batch_size}")
     print(f"learning_rate: {learning_rate}")
@@ -751,6 +855,9 @@ def main() -> None:
         "gradient_clip_norm": gradient_clip_norm,
         "scheduler": scheduler_info,
         "num_workers": num_workers,
+        "architecture": architecture,
+        "total_params": total_params,
+        "trainable_params": trainable_params,
         "loss_config": loss_config,
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
@@ -829,7 +936,17 @@ def main() -> None:
                 f"val_residual_ACC={row['val_residual_ACC']:.6g}"
             )
 
-            save_checkpoint(run_dir / "last.pt", model, optimizer, epoch, row, model_config, loss_config)
+            save_checkpoint(
+                run_dir / "last.pt",
+                model,
+                optimizer,
+                epoch,
+                row,
+                model_config,
+                loss_config,
+                scheduler=scheduler,
+                norm_stats=norm_stats,
+            )
             maybe_save_named_checkpoints(
                 run_dir,
                 model,
@@ -840,6 +957,8 @@ def main() -> None:
                 loss_config,
                 named_checkpoint_best_values,
                 named_checkpoint_best_epochs,
+                scheduler=scheduler,
+                norm_stats=norm_stats,
             )
             monitor_name = str(early_stopping["monitor"])
             if monitor_name not in val_metrics:
@@ -851,7 +970,17 @@ def main() -> None:
                 best_monitor = monitor_value
                 best_epoch = epoch
                 epochs_without_improvement = 0
-                save_checkpoint(run_dir / "best.pt", model, optimizer, epoch, row, model_config, loss_config)
+                save_checkpoint(
+                    run_dir / "best.pt",
+                    model,
+                    optimizer,
+                    epoch,
+                    row,
+                    model_config,
+                    loss_config,
+                    scheduler=scheduler,
+                    norm_stats=norm_stats,
+                )
             else:
                 epochs_without_improvement += 1
 

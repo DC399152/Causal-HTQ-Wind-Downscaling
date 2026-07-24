@@ -15,7 +15,7 @@ from scripts.evaluate import load_checkpoint, model_config_from_checkpoint
 from scripts.train import DEFAULT_DATASET_DIR
 from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_torch
 from src.models.baselines import repeat_current_hour
-from src.models.htq_transformer import CausalHTQTransformer
+from src.models.model_factory import build_model
 from src.training.utils import get_device, x_denormalize, y_denormalize
 from src.visualization.plot_samples import plot_sample_timeseries
 
@@ -40,7 +40,7 @@ def main() -> None:
 
     checkpoint = load_checkpoint(args.checkpoint, device)
     model_config = model_config_from_checkpoint(checkpoint)
-    model = CausalHTQTransformer(model_config).to(device)
+    model = build_model(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
@@ -81,6 +81,7 @@ def main() -> None:
             meteo_mask=meteo_mask,
             x_static=x_static,
             current_hourly_reference=current_hourly_reference,
+            height_values=item["height_values"].unsqueeze(0).to(device),
         )
         pred_ms = y_denormalize(out["pred"], norm_stats)[0].cpu()
         target_ms = y_denormalize(item["y_10min"].unsqueeze(0).to(device), norm_stats)[0].cpu()

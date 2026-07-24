@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
 from scripts.evaluate import load_checkpoint, model_config_from_checkpoint
 from scripts.train import make_loader, model_forward, move_batch
 from src.data.dataset import load_norm_stats, load_split_indices, require_torch
-from src.models.htq_transformer import CausalHTQTransformer
+from src.models.model_factory import build_model
 from src.training.utils import get_device, y_denormalize
 
 
@@ -228,7 +228,7 @@ def _infer_predictions(
     torch = require_torch()
     device = get_device(device_name)
     checkpoint = load_checkpoint(checkpoint_path, device)
-    model = CausalHTQTransformer(model_config_from_checkpoint(checkpoint)).to(device)
+    model = build_model(model_config_from_checkpoint(checkpoint)).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     norm_stats = load_norm_stats(dataset_dir / "norm_stats.json")

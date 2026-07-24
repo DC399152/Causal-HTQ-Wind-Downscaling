@@ -236,13 +236,15 @@ class WindDownscalingDataset:
                 meteo_std = np.asarray(self.norm_stats["meteo_std"], dtype=np.float32)
                 x_meteo = _normalize_array(x_meteo, meteo_mask, meteo_mean, meteo_std)
 
+        height_tensor = _as_tensor(height, dtype=require_torch().float32)
         item: dict[str, Any] = {
             "x_hourly": _as_tensor(x_hourly, dtype=require_torch().float32),
             "x_mask": _as_tensor(x_mask, dtype=require_torch().bool),
             "y_10min": _as_tensor(y_10min, dtype=require_torch().float32),
             "y_mask": _as_tensor(y_mask, dtype=require_torch().bool),
             "current_hourly": _as_tensor(current_hourly, dtype=require_torch().float32),
-            "height": _as_tensor(height, dtype=require_torch().float32),
+            "height": height_tensor,
+            "height_values": height_tensor,
             "sample_index": sample_index,
         }
         if current_hourly_y_norm is not None:

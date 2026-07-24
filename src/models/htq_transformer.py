@@ -178,6 +178,7 @@ class CausalHTQTransformer(nn.Module):
         meteo_mask: torch.Tensor | None = None,
         x_static: torch.Tensor | None = None,
         current_hourly_reference: torch.Tensor | None = None,
+        height_values: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | dict[str, object] | None]:
         """Run minimal HTQ forward.
 

@@ -28,7 +28,12 @@ from scripts.train import (
 )
 from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_torch
 from src.models.baselines import repeat_current_hour
-from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
+from src.models.model_factory import (
+    ModelConfig,
+    architecture_from_config,
+    build_model,
+    model_config_from_dict,
+)
 from src.training.utils import get_device, x_denormalize, y_denormalize
 
 
@@ -39,17 +44,19 @@ def load_checkpoint(path: str | Path, device):
     return torch.load(Path(path), map_location=device)
 
 
-def model_config_from_checkpoint(checkpoint: dict[str, Any]) -> HTQConfig:
-    """Reconstruct HTQConfig from checkpoint metadata."""
+def model_config_from_checkpoint(checkpoint: dict[str, Any]) -> ModelConfig:
+    """Reconstruct the correct model config from checkpoint metadata."""
 
     config = checkpoint.get("model_config")
     if not config:
         raise KeyError("Checkpoint is missing model_config")
     config = dict(config)
+    config.setdefault("architecture", checkpoint.get("architecture", "htq_encoder_decoder"))
     # Checkpoints created before context-conditioned queries used fixed target
     # queries and do not contain the extra context projection parameters.
-    config.setdefault("query_builder_type", "fixed")
-    return HTQConfig(**config)
+    if config["architecture"] == "htq_encoder_decoder":
+        config.setdefault("query_builder_type", "fixed")
+    return model_config_from_dict(config)
 
 
 def loss_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
@@ -94,7 +101,7 @@ def main() -> None:
     device = get_device(args.device)
     checkpoint = load_checkpoint(args.checkpoint, device)
     model_config = model_config_from_checkpoint(checkpoint)
-    model = CausalHTQTransformer(model_config).to(device)
+    model = build_model(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     loss_config = loss_config_from_checkpoint(checkpoint)
@@ -106,6 +113,7 @@ def main() -> None:
         "dataset_dir": str(args.dataset_dir),
         "device": str(device),
         "checkpoint_epoch": checkpoint.get("epoch"),
+        "architecture": architecture_from_config(model_config),
         "loss_config": loss_config,
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
@@ -130,6 +138,7 @@ def main() -> None:
     print(f"dataset_dir: {args.dataset_dir}")
     print(f"device: {device}")
     print(f"checkpoint_epoch: {checkpoint.get('epoch')}")
+    print(f"architecture: {architecture_from_config(model_config)}")
     print(
         f"loss: {loss_config['type']} normalized loss "
         f"(lambda_wind={loss_config['lambda_wind']}, "
