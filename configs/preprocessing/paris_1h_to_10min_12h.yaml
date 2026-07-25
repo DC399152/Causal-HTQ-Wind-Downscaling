@@ -1,0 +1,137 @@
+dataset_name: paris_1h_to_10min_12h
+
+paths:
+  raw_dir: data/raw
+  raw_3600s_dir: data/raw
+  raw_600s_dir: data/raw
+  processed_dir: data/processed
+  dataset_dir: data/datasets/paris_1h_to_10min_12h
+
+time:
+  timestamp_semantics: start
+  raw_timestamp_semantics: start
+  input_frequency_seconds: 3600
+  target_frequency_seconds: 600
+  target_steps_per_hour: 6
+  context_hours: 12
+  causal_context: true
+  context_alignment: causal_last
+  target_offsets_minutes: [0, 10, 20, 30, 40, 50]
+
+data_alignment:
+  station_matching_mode: strict
+  max_hourly_target_height_diff_m: 2.0
+  height_schema_policy: error
+
+sources:
+  paris_nc:
+    enabled: true
+    source_label: paris_nc
+
+  standard_csv:
+    dufeng_standard_csv:
+      enabled: false
+      source_label: dufeng
+      hourly_csv: data/processed/dufeng/dufeng_1h_standard.csv
+      target_csv: data/processed/dufeng/dufeng_10min_standard.csv
+      include_station_ids:
+        - dufeng_site_a
+      exclude_station_ids: []
+
+variables:
+  time: time
+  height: altitude
+  station: station
+  station_lat: station_lat
+  station_lon: station_lon
+  station_altitude: station_altitude
+  station_height: station_height
+  hourly_channels: [u, v]
+  target_channels: [u, v]
+  qc_flags: []
+
+height_selection:
+  selected_heights_agl: [250, 275, 300, 325, 350, 375]
+  height_reference: agl_rounded_station_altitude
+  max_height_diff: 12.5
+
+  by_source:
+    paris_nc:
+      selected_heights_agl: [250, 275, 300, 325, 350, 375]
+      height_reference: agl_rounded_station_altitude
+      max_height_diff: 12.5
+
+features:
+  input_channels:
+    - u
+    - v
+  target_channels:
+    - u
+    - v
+
+meteo:
+  enabled: true
+  source: era5
+  pressure_dir: data/ERA5
+  interpolation: bilinear
+  out_of_bounds: nearest
+  variables:
+    time: valid_time
+    pressure_level: pressure_level
+    latitude: latitude
+    longitude: longitude
+    temperature: t
+    humidity: r
+  channel_names: [temperature, humidity]
+  expected_pressure_levels_hpa: [1000, 975, 950, 925, 900]
+
+static_features:
+  use_lcz: true
+  lcz_feature_csv: data/processed/static/station_lcz_features_paris+dufeng_500m.csv
+  station_id_column: station_id
+  dominant_lcz_column: dominant_lcz_500m
+  feature_columns:
+    - LCZ_1_frac_500m
+    - LCZ_2_frac_500m
+    - LCZ_3_frac_500m
+    - LCZ_4_frac_500m
+    - LCZ_5_frac_500m
+    - LCZ_6_frac_500m
+    - LCZ_7_frac_500m
+    - LCZ_8_frac_500m
+    - LCZ_9_frac_500m
+    - LCZ_10_frac_500m
+    - LCZ_11_frac_500m
+    - LCZ_12_frac_500m
+    - LCZ_13_frac_500m
+    - LCZ_14_frac_500m
+    - LCZ_15_frac_500m
+    - LCZ_16_frac_500m
+    - LCZ_17_frac_500m
+
+quality_control:
+  missing_value: -999.0
+  allow_missing: true
+  max_missing_fraction_per_sample: 0.2
+  require_complete_target_hour: true
+  min_valid_ratio_x: 0.8
+  min_valid_ratio_x_per_hour: 0.8
+  min_valid_ratio_x_current_hour: 1.0
+  min_valid_ratio_y: 0.8
+  qc_policy:
+    use_flags: false
+    flag_thresholds: {}
+
+splits:
+  train_ratio: 0.8
+  val_ratio: 0.1
+  test_ratio: 0.1
+  split_gap_hours: 24
+  split_by_unique_time: true
+  split_time_key: target_time_start
+  split_within_source: true
+  split_within_station: true
+
+output:
+  format: npz
+  save_metadata: true

@@ -114,6 +114,8 @@ def main() -> None:
         "device": str(device),
         "checkpoint_epoch": checkpoint.get("epoch"),
         "architecture": architecture_from_config(model_config),
+        "output_head_type": model.output_head_config.type,
+        "output_head_config": model.output_head_config.__dict__,
         "loss_config": loss_config,
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
@@ -139,6 +141,7 @@ def main() -> None:
     print(f"device: {device}")
     print(f"checkpoint_epoch: {checkpoint.get('epoch')}")
     print(f"architecture: {architecture_from_config(model_config)}")
+    print(f"output_head_type: {model.output_head_config.type}")
     print(
         f"loss: {loss_config['type']} normalized loss "
         f"(lambda_wind={loss_config['lambda_wind']}, "

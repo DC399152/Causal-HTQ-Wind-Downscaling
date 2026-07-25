@@ -9,6 +9,10 @@ from torch import nn
 
 from src.models.meteo_encoder import MeteoEncoderConfig, MeteoPressureLevelEncoder
 from src.models.multimodal_fusion import GatedCrossAttentionFusion
+from src.models.output_heads import (
+    build_residual_head,
+    residual_head_config_from_model_fields,
+)
 from src.models.query_builder import ContextConditionedQueryBuilder, FixedTargetQueryBuilder
 from src.models.static_encoder import StaticEncoderConfig, StaticFeatureEncoder
 from src.models.tokenizer import HeightTimeTokenizer
@@ -51,6 +55,12 @@ class HTQConfig:
     query_use_multiscale_trend: bool = False
     query_trend_scales: tuple[int, ...] = (1, 3, 5)
     query_use_trend_context: bool = False
+    output_head_type: str | None = None
+    output_head_hidden_dim: int | None = None
+    output_head_dropout: float | None = None
+    output_head_final_weight_std: float | None = None
+    output_head_identical_horizon_init: bool = True
+    output_head_share_across_heights: bool = True
 
 
 class CausalHTQTransformer(nn.Module):
@@ -168,7 +178,28 @@ class CausalHTQTransformer(nn.Module):
             decoder_layer,
             num_layers=self.config.num_decoder_layers,
         )
-        self.residual_head = nn.Linear(self.config.d_model, self.config.output_channels)
+        self.output_head_config = residual_head_config_from_model_fields(
+            output_head_type=self.config.output_head_type,
+            output_head_hidden_dim=self.config.output_head_hidden_dim,
+            output_head_dropout=self.config.output_head_dropout,
+            output_head_final_weight_std=self.config.output_head_final_weight_std,
+            output_head_identical_horizon_init=(
+                self.config.output_head_identical_horizon_init
+            ),
+            output_head_share_across_heights=(
+                self.config.output_head_share_across_heights
+            ),
+            default_type="shared_linear",
+            default_hidden_dim=64,
+            default_dropout=0.05,
+            default_final_weight_std=0.001,
+        )
+        self.residual_head = build_residual_head(
+            d_model=self.config.d_model,
+            target_steps=self.config.target_steps,
+            output_channels=self.config.output_channels,
+            config=self.output_head_config,
+        )
 
     def forward(
         self,
@@ -179,6 +210,7 @@ class CausalHTQTransformer(nn.Module):
         x_static: torch.Tensor | None = None,
         current_hourly_reference: torch.Tensor | None = None,
         height_values: torch.Tensor | None = None,
+        return_features: bool = False,
     ) -> dict[str, torch.Tensor | dict[str, object] | None]:
         """Run minimal HTQ forward.
 
@@ -264,14 +296,14 @@ class CausalHTQTransformer(nn.Module):
             memory_key_padding_mask=src_key_padding_mask,
         )
 
-        # residual: [B, T_out, H, 2].
-        residual = self.residual_head(decoded)
-        residual = residual.reshape(
+        target_features = decoded.reshape(
             batch_size,
             self.config.target_steps,
             height_levels,
-            self.config.output_channels,
+            self.config.d_model,
         )
+        # residual: [B, T_out, H, 2].
+        residual = self.residual_head(target_features)
         # pred: reference hourly profile plus learned intra-hour residual.
         # When training in normalized space, callers can pass a y-normalized
         # current_hourly_reference so pred and y_10min use the same reference
@@ -287,12 +319,15 @@ class CausalHTQTransformer(nn.Module):
                 f"got {tuple(current_hourly.shape)}"
             )
         pred = current_hourly.unsqueeze(1) + residual
-        return {
+        output = {
             "pred": pred,
             "residual": residual,
             "encoder_memory": encoder_memory,
             "fusion_info": fusion_info,
         }
+        if return_features:
+            output["target_features"] = target_features
+        return output
 
     def _validate_inputs(self, x_hourly: torch.Tensor, x_mask: torch.Tensor) -> None:
         if x_hourly.ndim != 4:

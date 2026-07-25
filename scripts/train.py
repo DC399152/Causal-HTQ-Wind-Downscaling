@@ -21,6 +21,12 @@ from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_to
 from src.models.htq_encoder_only import EncoderOnlyConfig
 from src.models.htq_transformer import HTQConfig
 from src.models.model_factory import ModelConfig, architecture_from_config, build_model
+from src.models.output_heads import (
+    number_of_horizon_heads,
+    output_head_config_fields,
+    residual_head_parameter_counts,
+    residual_head_config_from_mapping,
+)
 from src.training.losses import residual_physics_loss
 from src.training.metrics import (
     add_metric_sums,
@@ -63,6 +69,15 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> Mode
     if architecture == "htq_target_token_encoder_only":
         target_cfg = model_cfg.get("target_tokens", {})
         residual_head_cfg = model_cfg.get("residual_head", {})
+        output_head_cfg = residual_head_config_from_mapping(
+            model_cfg.get("output_head"),
+            default_type="shared_mlp",
+            default_hidden_dim=int(residual_head_cfg.get("hidden_dim", 64)),
+            default_dropout=float(residual_head_cfg.get("dropout", 0.05)),
+            default_final_weight_std=float(
+                residual_head_cfg.get("final_weight_std", 0.001)
+            ),
+        )
         return EncoderOnlyConfig(
             architecture=architecture,
             name=str(model_cfg.get("name", "htq_encoder_only_v1")),
@@ -110,9 +125,14 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> Mode
             static_n_tokens=int(static_cfg.get("n_static_tokens", 1)),
             static_hidden_dim=int(static_cfg.get("hidden_dim", 128)),
             static_dropout=float(static_cfg.get("dropout", model_cfg.get("dropout", 0.1))),
+            **output_head_config_fields(output_head_cfg),
         )
     if architecture != "htq_encoder_decoder":
         raise ValueError(f"Unknown model architecture {architecture!r}")
+    output_head_cfg = residual_head_config_from_mapping(
+        model_cfg.get("output_head"),
+        default_type="shared_linear",
+    )
     return HTQConfig(
         d_model=args.d_model or int(model_cfg.get("d_model", 64)),
         nhead=args.nhead or int(model_cfg.get("n_heads", model_cfg.get("nhead", 4))),
@@ -151,6 +171,7 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> Mode
         ),
         query_trend_scales=trend_scales,
         query_use_trend_context=bool(query_cfg.get("use_trend_context", False)),
+        **output_head_config_fields(output_head_cfg),
     )
 
 
@@ -188,7 +209,12 @@ def move_batch(batch: dict[str, Any], device):
     }
 
 
-def model_forward(model, batch: dict[str, Any]):
+def model_forward(
+    model,
+    batch: dict[str, Any],
+    *,
+    return_features: bool = False,
+):
     """Run HTQ with optional multimodal inputs when present in the batch."""
 
     return model(
@@ -199,6 +225,7 @@ def model_forward(model, batch: dict[str, Any]):
         x_static=batch.get("x_static"),
         current_hourly_reference=batch.get("current_hourly_y_norm"),
         height_values=batch.get("height_values", batch.get("height")),
+        return_features=return_features,
     )
 
 
@@ -584,6 +611,7 @@ def save_checkpoint(
             "scheduler_state_dict": scheduler.state_dict() if scheduler is not None else None,
             "metrics": metrics,
             "model_config": model_config.__dict__,
+            "output_head_config": model.output_head_config.__dict__,
             "loss_weights": {
                 "lambda_wind": float(loss_config["lambda_wind"]),
                 "lambda_extreme": float(loss_config["lambda_extreme"]),
@@ -759,6 +787,20 @@ def main() -> None:
     model_config = build_model_config(config, args)
     model = build_model(model_config).to(device)
     architecture = architecture_from_config(model_config)
+    output_head_config = model.output_head_config
+    output_head_params = sum(
+        parameter.numel() for parameter in model.residual_head.parameters()
+    )
+    output_head_parameter_comparison = residual_head_parameter_counts(
+        d_model=model_config.d_model,
+        target_steps=model_config.target_steps,
+        output_channels=model_config.output_channels,
+        hidden_dim=output_head_config.hidden_dim,
+    )
+    horizon_head_count = number_of_horizon_heads(
+        output_head_config,
+        model_config.target_steps,
+    )
     total_params = sum(parameter.numel() for parameter in model.parameters())
     trainable_params = sum(
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad
@@ -782,6 +824,20 @@ def main() -> None:
     print(f"run_dir: {run_dir}")
     print(f"device: {device}")
     print(f"architecture: {architecture}")
+    print(f"output_head_type: {output_head_config.type}")
+    print(f"output_head_params: {output_head_params}")
+    print(f"output_head_parameter_comparison: {output_head_parameter_comparison}")
+    print(f"target_steps: {model_config.target_steps}")
+    print(f"height_levels: {model_config.height_levels}")
+    print(f"number_of_horizon_heads: {horizon_head_count}")
+    print(
+        "share_across_heights: "
+        f"{output_head_config.share_across_heights}"
+    )
+    print(
+        "identical_horizon_init: "
+        f"{output_head_config.identical_horizon_init}"
+    )
     print(f"total_params: {total_params}")
     print(f"trainable_params: {trainable_params}")
     print(f"d_model: {model_config.d_model}")
@@ -856,6 +912,13 @@ def main() -> None:
         "scheduler": scheduler_info,
         "num_workers": num_workers,
         "architecture": architecture,
+        "output_head_type": output_head_config.type,
+        "output_head_config": output_head_config.__dict__,
+        "output_head_params": output_head_params,
+        "output_head_parameter_comparison": output_head_parameter_comparison,
+        "number_of_horizon_heads": horizon_head_count,
+        "share_across_heights": output_head_config.share_across_heights,
+        "identical_horizon_init": output_head_config.identical_horizon_init,
         "total_params": total_params,
         "trainable_params": trainable_params,
         "loss_config": loss_config,

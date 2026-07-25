@@ -69,7 +69,7 @@ def test_encoder_only_forward_shapes_and_token_validity():
     assert not bool(tokenized.token_valid[:, 3, 2].any())
 
     with torch.no_grad():
-        output = model_forward(model, batch)
+        output = model_forward(model, batch, return_features=True)
 
     assert output["pred"].shape == (2, 6, 6, 2)
     assert output["residual"].shape == (2, 6, 6, 2)
@@ -191,6 +191,7 @@ def test_training_checkpoint_contains_architecture_scheduler_and_norm_stats(tmp_
     )
     checkpoint = torch.load(path, map_location="cpu")
     assert checkpoint["architecture"] == "htq_target_token_encoder_only"
+    assert checkpoint["output_head_config"]["type"] == "shared_mlp"
     assert checkpoint["scheduler_state_dict"] is not None
     assert checkpoint["norm_stats"] == norm_stats
 

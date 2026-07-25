@@ -9,6 +9,10 @@ from torch import nn
 
 from src.models.meteo_encoder import MeteoEncoderConfig, MeteoPressureLevelEncoder
 from src.models.multimodal_fusion import GatedCrossAttentionFusion
+from src.models.output_heads import (
+    build_residual_head,
+    residual_head_config_from_model_fields,
+)
 from src.models.physical_height_encoder import PhysicalHeightEncoder
 from src.models.static_encoder import StaticEncoderConfig, StaticFeatureEncoder
 from src.models.target_token_builder import TargetTokenBuilder
@@ -46,6 +50,12 @@ class EncoderOnlyConfig:
     residual_head_hidden_dim: int = 64
     residual_head_dropout: float = 0.05
     residual_head_final_weight_std: float = 0.001
+    output_head_type: str | None = None
+    output_head_hidden_dim: int | None = None
+    output_head_dropout: float | None = None
+    output_head_final_weight_std: float | None = None
+    output_head_identical_horizon_init: bool = True
+    output_head_share_across_heights: bool = True
     use_meteo: bool = False
     use_static: bool = False
     meteo_context_hours: int = 12
@@ -145,20 +155,28 @@ class HTQTargetTokenEncoderOnly(nn.Module):
             norm=nn.LayerNorm(self.config.d_model),
             enable_nested_tensor=False,
         )
-        self.residual_head = nn.Sequential(
-            nn.LayerNorm(self.config.d_model),
-            nn.Linear(self.config.d_model, self.config.residual_head_hidden_dim),
-            nn.GELU(),
-            nn.Dropout(self.config.residual_head_dropout),
-            nn.Linear(self.config.residual_head_hidden_dim, self.config.output_channels),
+        self.output_head_config = residual_head_config_from_model_fields(
+            output_head_type=self.config.output_head_type,
+            output_head_hidden_dim=self.config.output_head_hidden_dim,
+            output_head_dropout=self.config.output_head_dropout,
+            output_head_final_weight_std=self.config.output_head_final_weight_std,
+            output_head_identical_horizon_init=(
+                self.config.output_head_identical_horizon_init
+            ),
+            output_head_share_across_heights=(
+                self.config.output_head_share_across_heights
+            ),
+            default_type="shared_mlp",
+            default_hidden_dim=self.config.residual_head_hidden_dim,
+            default_dropout=self.config.residual_head_dropout,
+            default_final_weight_std=self.config.residual_head_final_weight_std,
         )
-        final_layer = self.residual_head[-1]
-        nn.init.normal_(
-            final_layer.weight,
-            mean=0.0,
-            std=self.config.residual_head_final_weight_std,
+        self.residual_head = build_residual_head(
+            d_model=self.config.d_model,
+            target_steps=self.config.target_steps,
+            output_channels=self.config.output_channels,
+            config=self.output_head_config,
         )
-        nn.init.zeros_(final_layer.bias)
 
     @property
     def input_token_count(self) -> int:
@@ -200,6 +218,7 @@ class HTQTargetTokenEncoderOnly(nn.Module):
         x_static: torch.Tensor | None = None,
         current_hourly_reference: torch.Tensor | None = None,
         height_values: torch.Tensor | None = None,
+        return_features: bool = False,
     ) -> dict[str, torch.Tensor | dict[str, object] | None]:
         """Return residual and prediction tensors with shape ``[B, T, H, C]``."""
 
@@ -318,8 +337,8 @@ class HTQTargetTokenEncoderOnly(nn.Module):
             raise ValueError("activation must be 'relu' or 'gelu'")
         if not self.config.use_physical_height_embedding:
             raise ValueError("Encoder-only model requires use_physical_height_embedding=True")
-        if self.config.residual_head_final_weight_std <= 0:
-            raise ValueError("residual_head_final_weight_std must be positive")
+        if self.config.residual_head_final_weight_std < 0:
+            raise ValueError("residual_head_final_weight_std must be non-negative")
 
     def _validate_inputs(
         self,

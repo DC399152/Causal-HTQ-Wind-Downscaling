@@ -9,6 +9,10 @@ from torch import nn
 
 from src.models.htq_encoder_only import EncoderOnlyConfig, HTQTargetTokenEncoderOnly
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
+from src.models.output_heads import (
+    output_head_config_fields,
+    residual_head_config_from_mapping,
+)
 
 
 ModelConfig = HTQConfig | EncoderOnlyConfig
@@ -26,6 +30,31 @@ def model_config_from_dict(config: Mapping[str, Any]) -> ModelConfig:
     """Create the architecture-specific dataclass while ignoring unrelated keys."""
 
     architecture = architecture_from_config(config)
+    config = dict(config)
+    nested_output_head = config.get("output_head")
+    if isinstance(nested_output_head, Mapping):
+        default_type = (
+            "shared_mlp"
+            if architecture == "htq_target_token_encoder_only"
+            else "shared_linear"
+        )
+        config.update(
+            output_head_config_fields(
+                residual_head_config_from_mapping(
+                    nested_output_head,
+                    default_type=default_type,
+                    default_hidden_dim=int(
+                        config.get("residual_head_hidden_dim", 64)
+                    ),
+                    default_dropout=float(
+                        config.get("residual_head_dropout", 0.05)
+                    ),
+                    default_final_weight_std=float(
+                        config.get("residual_head_final_weight_std", 0.001)
+                    ),
+                )
+            )
+        )
     if architecture == "htq_encoder_decoder":
         allowed = {field.name for field in fields(HTQConfig)}
         return HTQConfig(**{key: value for key, value in config.items() if key in allowed})
