@@ -7,6 +7,7 @@ normalized-space masked MSE plus denormalized physical m/s MAE and RMSE.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -74,10 +75,93 @@ def loss_config_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any]:
     raise KeyError("Checkpoint is missing residual_physics loss_config")
 
 
+def dataset_fingerprint(dataset_dir: str | Path) -> str:
+    """Return the checkpoint-compatible fingerprint for dataset.npz."""
+
+    dataset_path = Path(dataset_dir) / "dataset.npz"
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset file does not exist: {dataset_path}")
+
+    digest = hashlib.sha256()
+    with dataset_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def resolve_evaluation_dataset_dir(
+    checkpoint: dict[str, Any],
+    requested_dataset_dir: str | Path | None,
+    *,
+    allow_mismatch: bool = False,
+) -> Path:
+    """Resolve the dataset and reject accidental cross-dataset evaluation."""
+
+    metadata = checkpoint.get("dataset_metadata") or {}
+    checkpoint_dataset_path = metadata.get("dataset_path")
+    checkpoint_dataset_dir = (
+        Path(checkpoint_dataset_path).parent
+        if checkpoint_dataset_path
+        else None
+    )
+
+    if requested_dataset_dir is None:
+        dataset_dir = checkpoint_dataset_dir or Path(DEFAULT_DATASET_DIR)
+    else:
+        dataset_dir = Path(requested_dataset_dir)
+
+    expected_fingerprint = (
+        checkpoint.get("dataset_fingerprint")
+        or metadata.get("dataset_fingerprint")
+    )
+    if expected_fingerprint and not allow_mismatch:
+        actual_fingerprint = dataset_fingerprint(dataset_dir)
+        if actual_fingerprint != expected_fingerprint:
+            expected_location = (
+                f" Expected training dataset: {checkpoint_dataset_dir}."
+                if checkpoint_dataset_dir is not None
+                else ""
+            )
+            raise ValueError(
+                "Evaluation dataset does not match the checkpoint training dataset. "
+                f"Checkpoint fingerprint={expected_fingerprint}, "
+                f"evaluation fingerprint={actual_fingerprint}."
+                f"{expected_location} "
+                "Use the matching dataset, or pass --allow-dataset-mismatch only "
+                "for an intentional cross-dataset evaluation."
+            )
+    elif (
+        checkpoint_dataset_dir is not None
+        and requested_dataset_dir is not None
+        and dataset_dir.resolve() != checkpoint_dataset_dir.resolve()
+        and not allow_mismatch
+    ):
+        raise ValueError(
+            "Evaluation dataset path does not match the checkpoint training dataset: "
+            f"{dataset_dir} != {checkpoint_dataset_dir}. "
+            "Use the matching dataset, or pass --allow-dataset-mismatch only "
+            "for an intentional cross-dataset evaluation."
+        )
+
+    return dataset_dir
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", default="runs/htq_minimal/best.pt")
-    parser.add_argument("--dataset-dir", default=DEFAULT_DATASET_DIR)
+    parser.add_argument(
+        "--dataset-dir",
+        default=None,
+        help=(
+            "Dataset to evaluate. Defaults to the training dataset recorded in "
+            "the checkpoint, or the legacy project default for old checkpoints."
+        ),
+    )
+    parser.add_argument(
+        "--allow-dataset-mismatch",
+        action="store_true",
+        help="Allow intentional evaluation on a dataset different from training.",
+    )
     parser.add_argument("--splits", nargs="+", default=["train", "val", "test"])
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--num-workers", type=int, default=0)
@@ -86,12 +170,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output", dest="output_json", default=None, help="Alias for --output-json")
     parser.add_argument("--make-plots", action="store_true", help="Write training curves and sample visualizations")
+    parser.add_argument("--plots-only", action="store_true", help="Generate plots without recomputing or rewriting metrics")
     parser.add_argument("--figures-dir", default=None)
     parser.add_argument("--num-random-plots", type=int, default=3)
     parser.add_argument("--num-high-error-plots", type=int, default=3)
     parser.add_argument("--num-high-fluctuation-plots", type=int, default=3)
     parser.add_argument("--plot-split", default=None, help="Split used for sample plots; defaults to the last evaluated split")
     parser.add_argument("--plot-seed", type=int, default=42)
+    parser.add_argument("--sample-gallery-size", type=int, default=100)
+    parser.add_argument("--sample-gallery-split", default="test")
     return parser.parse_args()
 
 
@@ -100,13 +187,19 @@ def main() -> None:
     torch = require_torch()
     device = get_device(args.device)
     checkpoint = load_checkpoint(args.checkpoint, device)
+    dataset_dir = resolve_evaluation_dataset_dir(
+        checkpoint,
+        args.dataset_dir,
+        allow_mismatch=args.allow_dataset_mismatch,
+    )
+    args.dataset_dir = str(dataset_dir)
     model_config = model_config_from_checkpoint(checkpoint)
     model = build_model(model_config).to(device)
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
     loss_config = loss_config_from_checkpoint(checkpoint)
 
-    norm_stats = load_norm_stats(Path(args.dataset_dir) / "norm_stats.json")
+    norm_stats = load_norm_stats(dataset_dir / "norm_stats.json")
     loss_config = attach_norm_stats_to_loss_config(loss_config, norm_stats)
     results: dict[str, Any] = {
         "checkpoint": str(args.checkpoint),
@@ -158,6 +251,20 @@ def main() -> None:
     )
     print("metrics: denormalized physical m/s")
 
+    output_path = Path(args.output_json) if args.output_json else Path(args.checkpoint).resolve().parent / "eval.json"
+    if args.plots_only:
+        figures_dir = Path(args.figures_dir) if args.figures_dir else output_path.parent / "figures"
+        written = make_plots(
+            args=args,
+            model=model,
+            norm_stats=norm_stats,
+            device=device,
+            figures_dir=figures_dir,
+            sample_gallery_dir=output_path.parent / "sample_gallery",
+        )
+        print(f"wrote {len(written)} plot files")
+        return
+
     with torch.no_grad():
         for split in args.splits:
             loader = make_loader(
@@ -189,13 +296,13 @@ def main() -> None:
                 f"u_MAE_ms={metrics['u_MAE_ms']:.6g} "
                 f"v_MAE_ms={metrics['v_MAE_ms']:.6g} "
                 f"speed_MAE_ms={metrics['speed_MAE_ms']:.6g} "
+                f"global_flattened_ACC={metrics['global_flattened_ACC']:.6g} "
                 f"residual_ACC={metrics['residual_ACC']:.6g} "
                 f"temporal_gradient_MAE_ms={metrics['temporal_gradient_MAE_ms']:.6g} "
                 f"temporal_gradient_ACC={metrics['temporal_gradient_ACC']:.6g} "
                 f"valid_target_values={int(metrics['valid_target_values'])}"
             )
 
-    output_path = Path(args.output_json) if args.output_json else Path(args.checkpoint).resolve().parent / "eval.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
@@ -210,6 +317,7 @@ def main() -> None:
                 norm_stats=norm_stats,
                 device=device,
                 figures_dir=figures_dir,
+                sample_gallery_dir=output_path.parent / "sample_gallery",
             )
             for path in written:
                 print(f"wrote: {path}")
@@ -224,8 +332,9 @@ def make_plots(
     norm_stats: dict[str, Any],
     device,
     figures_dir: Path,
+    sample_gallery_dir: Path,
 ) -> list[Path]:
-    """Generate training curves and representative sample plots."""
+    """Generate training curves and an unbiased test-sample gallery."""
 
     # Windows/conda can load both libomp and libiomp5md when torch and
     # matplotlib/numpy meet. Keep metrics usable and allow plotting to proceed.
@@ -240,24 +349,85 @@ def make_plots(
     else:
         print(f"warning: metrics.json not found, skipped loss curves: {metrics_path}")
 
-    plot_split = args.plot_split or args.splits[-1]
     written.extend(
-        plot_representative_samples(
+        plot_sample_gallery(
             model=model,
             dataset_dir=args.dataset_dir,
-            split=plot_split,
+            split=args.sample_gallery_split,
             norm_stats=norm_stats,
             device=device,
-            figures_dir=figures_dir,
+            output_dir=sample_gallery_dir,
             seed=args.plot_seed,
-            num_random=args.num_random_plots,
-            num_high_error=args.num_high_error_plots,
-            num_high_fluctuation=args.num_high_fluctuation_plots,
-            batch_size=args.batch_size,
-            num_workers=args.num_workers,
-            limit_batches=args.limit_batches,
+            num_samples=args.sample_gallery_size,
         )
     )
+    return written
+
+
+def plot_sample_gallery(
+    *,
+    model,
+    dataset_dir: str | Path,
+    split: str,
+    norm_stats: dict[str, Any],
+    device,
+    output_dir: Path,
+    seed: int,
+    num_samples: int,
+) -> list[Path]:
+    """Plot deterministic random samples without error/fluctuation selection."""
+
+    torch = require_torch()
+    dataset = WindDownscalingDataset(
+        dataset_dir,
+        split=split,
+        normalize=True,
+        return_metadata=True,
+    )
+    count = min(max(num_samples, 0), len(dataset))
+    generator = torch.Generator().manual_seed(seed)
+    indices = torch.randperm(len(dataset), generator=generator)[:count].tolist()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest: dict[str, Any] = {
+        "dataset_dir": str(dataset_dir),
+        "split": split,
+        "seed": seed,
+        "requested_samples": num_samples,
+        "selected_samples": [],
+    }
+    written: list[Path] = []
+    for rank, local_index in enumerate(indices, start=1):
+        item = dataset[int(local_index)]
+        output_path = output_dir / f"sample_{rank:03d}_local_{int(local_index):06d}.png"
+        plot_one_sample(
+            model=model,
+            dataset=dataset,
+            local_index=int(local_index),
+            split=split,
+            norm_stats=norm_stats,
+            device=device,
+            output_path=None,
+            context_output_path=output_path,
+            label="gallery",
+            item=item,
+        )
+        manifest["selected_samples"].append(
+            {
+                "rank": rank,
+                "local_index": int(local_index),
+                "sample_index": int(item["sample_index"]),
+                "station_id": str(item.get("station_id", "unknown")),
+                "target_time_start": str(item.get("target_time_start", "unknown")),
+                "file": output_path.name,
+            }
+        )
+        written.append(output_path)
+
+    manifest_path = output_dir / "manifest.json"
+    with manifest_path.open("w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    written.append(manifest_path)
     return written
 
 
@@ -395,19 +565,21 @@ def plot_one_sample(
     split: str,
     norm_stats: dict[str, Any],
     device,
-    output_path: Path,
-    context_output_path: Path,
+    output_path: Path | None,
+    context_output_path: Path | None,
     label: str,
+    item=None,
 ) -> None:
     """Run model on one dataset item and save truth/pred/repeat plot."""
 
     torch = require_torch()
-    item = WindDownscalingDataset(
-        dataset.dataset_dir,
-        split=split,
-        normalize=True,
-        return_metadata=True,
-    )[local_index]
+    if item is None:
+        item = WindDownscalingDataset(
+            dataset.dataset_dir,
+            split=split,
+            normalize=True,
+            return_metadata=True,
+        )[local_index]
     batch = {
         key: value.unsqueeze(0).to(device)
         for key, value in item.items()
@@ -427,26 +599,28 @@ def plot_one_sample(
     )
     from src.visualization.plot_samples import plot_sample_timeseries, plot_sample_with_hourly_context
 
-    plot_sample_timeseries(
-        target=target_ms,
-        pred=pred_ms,
-        repeat=repeat_ms,
-        y_mask=item["y_mask"],
-        height_values=[float(v) for v in item["height_values"]],
-        output_path=output_path,
-        title=title,
-    )
-    plot_sample_with_hourly_context(
-        context=context_ms,
-        target=target_ms,
-        pred=pred_ms,
-        repeat=repeat_ms,
-        x_mask=item["x_mask"],
-        y_mask=item["y_mask"],
-        height_values=[float(v) for v in item["height_values"]],
-        output_path=context_output_path,
-        title=title,
-    )
+    if output_path is not None:
+        plot_sample_timeseries(
+            target=target_ms,
+            pred=pred_ms,
+            repeat=repeat_ms,
+            y_mask=item["y_mask"],
+            height_values=[float(v) for v in item["height_values"]],
+            output_path=output_path,
+            title=title,
+        )
+    if context_output_path is not None:
+        plot_sample_with_hourly_context(
+            context=context_ms,
+            target=target_ms,
+            pred=pred_ms,
+            repeat=repeat_ms,
+            x_mask=item["x_mask"],
+            y_mask=item["y_mask"],
+            height_values=[float(v) for v in item["height_values"]],
+            output_path=context_output_path,
+            title=title,
+        )
 
 
 if __name__ == "__main__":

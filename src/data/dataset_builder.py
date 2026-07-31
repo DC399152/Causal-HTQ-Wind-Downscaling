@@ -867,6 +867,8 @@ def _build_samples_from_global_series(
                     context_times,
                     config.quality.missing_value,
                 )
+                if config.meteo.require_complete_context and not np.all(meteo_mask):
+                    continue
             x_static = None
             dominant_lcz = None
             if static_data is not None:
@@ -1428,6 +1430,7 @@ def _write_dataset(
             "pressure_dir": str(config.meteo.pressure_dir) if config.meteo.pressure_dir else None,
             "interpolation": config.meteo.interpolation,
             "out_of_bounds": config.meteo.out_of_bounds,
+            "require_complete_context": config.meteo.require_complete_context,
             "channel_names": list(config.meteo.channel_names),
             "pressure_levels_hpa": arrays.get("meteo_pressure_levels", np.asarray([])).tolist(),
         },

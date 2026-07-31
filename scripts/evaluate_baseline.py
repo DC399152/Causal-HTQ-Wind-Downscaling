@@ -80,6 +80,7 @@ def main() -> None:
             print(f"  u_MAE_ms: {metrics['u_MAE_ms']:.6g}")
             print(f"  v_MAE_ms: {metrics['v_MAE_ms']:.6g}")
             print(f"  speed_MAE_ms: {metrics['speed_MAE_ms']:.6g}")
+            print(f"  global_flattened_ACC: {metrics['global_flattened_ACC']:.6g}")
             print(f"  residual_ACC: {metrics['residual_ACC']:.6g}")
             print(f"  temporal_gradient_MAE_ms: {metrics['temporal_gradient_MAE_ms']:.6g}")
             print(f"  temporal_gradient_ACC: {metrics['temporal_gradient_ACC']:.6g}")

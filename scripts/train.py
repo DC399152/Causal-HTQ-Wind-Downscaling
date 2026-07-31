@@ -7,18 +7,23 @@ computed after denormalizing predictions and targets to physical m/s units.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.data.dataset import WindDownscalingDataset, load_norm_stats, require_torch
+from src.models.htq_cross_attention_reader import CrossAttentionReaderConfig
 from src.models.htq_encoder_only import EncoderOnlyConfig
+from src.models.htq_fusion_time_height_mlp import FusionTimeHeightMLPConfig
 from src.models.htq_transformer import HTQConfig
 from src.models.model_factory import ModelConfig, architecture_from_config, build_model
 from src.models.output_heads import (
@@ -66,6 +71,91 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> Mode
     pressure_levels = tuple(int(v) for v in meteo_cfg.get("pressure_levels_hpa", [1000, 975, 950, 925, 900]))
     trend_scales = tuple(int(v) for v in query_cfg.get("trend_scales", [1, 3, 5]))
     architecture = str(model_cfg.get("architecture", "htq_encoder_decoder"))
+    if architecture == "htq_fusion_time_height_mlp":
+        output_head_cfg = residual_head_config_from_mapping(
+            model_cfg.get("output_head"),
+            default_type="multi_horizon_shared_trunk",
+        )
+        return FusionTimeHeightMLPConfig(
+            architecture=architecture,
+            name=str(model_cfg.get("name", "htq_fusion_time_height_mlp_v1")),
+            context_hours=int(
+                model_cfg.get(
+                    "context_hours",
+                    data_cfg.get("context_hours", 12),
+                )
+            ),
+            target_steps=int(
+                model_cfg.get("target_steps", data_cfg.get("target_steps", 6))
+            ),
+            height_levels=int(model_cfg.get("height_levels", 6)),
+            input_channels=int(model_cfg.get("input_channels", 2)),
+            output_channels=int(model_cfg.get("output_channels", 2)),
+            d_model=args.d_model or int(model_cfg.get("d_model", 128)),
+            mlp_d_model=int(model_cfg.get("mlp_d_model", 96)),
+            num_mixer_blocks=int(model_cfg.get("num_mixer_blocks", 3)),
+            temporal_mixing_hidden_dim=int(
+                model_cfg.get("temporal_mixing_hidden_dim", 32)
+            ),
+            height_mixing_hidden_dim=int(
+                model_cfg.get("height_mixing_hidden_dim", 16)
+            ),
+            channel_expansion_ratio=int(
+                model_cfg.get("channel_expansion_ratio", 4)
+            ),
+            mixer_dropout=float(model_cfg.get("mixer_dropout", 0.1)),
+            target_projection_hidden_dim=int(
+                model_cfg.get("target_projection_hidden_dim", 24)
+            ),
+            target_projection_dropout=float(
+                model_cfg.get("target_projection_dropout", 0.05)
+            ),
+            use_target_time_embedding=bool(
+                model_cfg.get("use_target_time_embedding", True)
+            ),
+            include_mask_features=bool(
+                model_cfg.get("include_mask_features", True)
+            ),
+            include_delta_features=bool(
+                model_cfg.get("include_delta_features", True)
+            ),
+            use_meteo=bool(
+                multimodal_cfg.get(
+                    "use_meteo",
+                    model_cfg.get("use_meteo", False),
+                )
+            ),
+            use_static=bool(
+                multimodal_cfg.get(
+                    "use_static",
+                    model_cfg.get("use_static", False),
+                )
+            ),
+            meteo_context_hours=int(
+                meteo_cfg.get(
+                    "context_hours",
+                    data_cfg.get("context_hours", 12),
+                )
+            ),
+            meteo_pressure_levels_hpa=pressure_levels,
+            num_meteo_channels=int(
+                meteo_cfg.get("num_meteo_channels", 2)
+            ),
+            meteo_use_delta=bool(meteo_cfg.get("use_delta", True)),
+            meteo_use_mask_channels=bool(
+                meteo_cfg.get("use_mask_channels", False)
+            ),
+            fusion_nhead=int(fusion_cfg.get("nhead", 4)),
+            fusion_dropout=float(fusion_cfg.get("dropout", 0.1)),
+            fusion_gate_init_bias=float(
+                fusion_cfg.get("gate_init_bias", -2.0)
+            ),
+            static_input_dim=int(static_cfg.get("input_dim", 17)),
+            static_n_tokens=int(static_cfg.get("n_static_tokens", 1)),
+            static_hidden_dim=int(static_cfg.get("hidden_dim", 128)),
+            static_dropout=float(static_cfg.get("dropout", 0.1)),
+            **output_head_config_fields(output_head_cfg),
+        )
     if architecture == "htq_target_token_encoder_only":
         target_cfg = model_cfg.get("target_tokens", {})
         residual_head_cfg = model_cfg.get("residual_head", {})
@@ -127,13 +217,20 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> Mode
             static_dropout=float(static_cfg.get("dropout", model_cfg.get("dropout", 0.1))),
             **output_head_config_fields(output_head_cfg),
         )
-    if architecture != "htq_encoder_decoder":
+    if architecture not in {
+        "htq_encoder_decoder",
+        "htq_cross_attention_reader",
+    }:
         raise ValueError(f"Unknown model architecture {architecture!r}")
     output_head_cfg = residual_head_config_from_mapping(
         model_cfg.get("output_head"),
-        default_type="shared_linear",
+        default_type=(
+            "multi_horizon_shared_trunk"
+            if architecture == "htq_cross_attention_reader"
+            else "shared_linear"
+        ),
     )
-    return HTQConfig(
+    common_fields = dict(
         d_model=args.d_model or int(model_cfg.get("d_model", 64)),
         nhead=args.nhead or int(model_cfg.get("n_heads", model_cfg.get("nhead", 4))),
         num_encoder_layers=args.encoder_layers
@@ -173,6 +270,31 @@ def build_model_config(config: dict[str, Any], args: argparse.Namespace) -> Mode
         query_use_trend_context=bool(query_cfg.get("use_trend_context", False)),
         **output_head_config_fields(output_head_cfg),
     )
+    if architecture == "htq_cross_attention_reader":
+        return CrossAttentionReaderConfig(
+            architecture=architecture,
+            name=str(model_cfg.get("name", "htq_cross_attention_reader_v1")),
+            reader_num_layers=int(model_cfg.get("reader_num_layers", 1)),
+            reader_nhead=int(
+                model_cfg.get(
+                    "reader_nhead",
+                    model_cfg.get("n_heads", model_cfg.get("nhead", 4)),
+                )
+            ),
+            reader_dim_feedforward=int(
+                model_cfg.get(
+                    "reader_dim_feedforward",
+                    model_cfg.get("dim_feedforward", 256),
+                )
+            ),
+            reader_dropout=float(
+                model_cfg.get("reader_dropout", model_cfg.get("dropout", 0.1))
+            ),
+            reader_activation=str(model_cfg.get("reader_activation", "gelu")),
+            reader_final_norm=bool(model_cfg.get("reader_final_norm", True)),
+            **common_fields,
+        )
+    return HTQConfig(**common_fields)
 
 
 def make_loader(
@@ -214,10 +336,11 @@ def model_forward(
     batch: dict[str, Any],
     *,
     return_features: bool = False,
+    return_attention: bool = False,
 ):
     """Run HTQ with optional multimodal inputs when present in the batch."""
 
-    return model(
+    kwargs = dict(
         x_hourly=batch["x_hourly"],
         x_mask=batch["x_mask"],
         x_meteo=batch.get("x_meteo"),
@@ -227,6 +350,9 @@ def model_forward(
         height_values=batch.get("height_values", batch.get("height")),
         return_features=return_features,
     )
+    if return_attention:
+        kwargs["return_attention"] = True
+    return model(**kwargs)
 
 
 def compute_loss_parts(outputs: dict[str, Any], batch: dict[str, Any], loss_config: dict[str, float | str]):
@@ -597,6 +723,7 @@ def save_checkpoint(
     loss_config: dict[str, float | str],
     scheduler=None,
     norm_stats: dict[str, Any] | None = None,
+    dataset_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save a compact PyTorch checkpoint."""
 
@@ -628,9 +755,38 @@ def save_checkpoint(
             },
             "loss_config": loss_config,
             "norm_stats": norm_stats,
+            "dataset_fingerprint": (
+                dataset_metadata or {}
+            ).get("dataset_fingerprint"),
+            "height_values": (dataset_metadata or {}).get("height_values"),
+            "dataset_metadata": dataset_metadata,
         },
         path,
     )
+
+
+def build_dataset_checkpoint_metadata(
+    dataset_dir: str | Path,
+) -> dict[str, Any]:
+    """Return a content fingerprint and actual height schemas for checkpoints."""
+
+    dataset_path = Path(dataset_dir) / "dataset.npz"
+    if not dataset_path.exists():
+        raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
+    digest = hashlib.sha256()
+    with dataset_path.open("rb") as f:
+        for chunk in iter(lambda: f.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    with np.load(dataset_path, allow_pickle=True) as data:
+        height_values = np.unique(
+            np.asarray(data["height_values"], dtype=np.float32),
+            axis=0,
+        ).tolist()
+    return {
+        "dataset_path": str(dataset_path),
+        "dataset_fingerprint": f"sha256:{digest.hexdigest()}",
+        "height_values": height_values,
+    }
 
 
 def write_metrics_json(path: str | Path, summary: dict[str, Any]) -> None:
@@ -663,6 +819,7 @@ def maybe_save_named_checkpoints(
     best_epochs: dict[str, int],
     scheduler=None,
     norm_stats: dict[str, Any] | None = None,
+    dataset_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Save additional validation-best checkpoints without changing early stopping."""
 
@@ -694,6 +851,7 @@ def maybe_save_named_checkpoints(
                 loss_config,
                 scheduler=scheduler,
                 norm_stats=norm_stats,
+                dataset_metadata=dataset_metadata,
             )
 
 
@@ -787,12 +945,20 @@ def main() -> None:
     model_config = build_model_config(config, args)
     model = build_model(model_config).to(device)
     architecture = architecture_from_config(model_config)
+    dataset_metadata = (
+        build_dataset_checkpoint_metadata(dataset_dir)
+        if architecture == "htq_fusion_time_height_mlp"
+        else None
+    )
     output_head_config = model.output_head_config
     output_head_params = sum(
         parameter.numel() for parameter in model.residual_head.parameters()
     )
+    output_head_input_dim = int(
+        getattr(model_config, "mlp_d_model", model_config.d_model)
+    )
     output_head_parameter_comparison = residual_head_parameter_counts(
-        d_model=model_config.d_model,
+        d_model=output_head_input_dim,
         target_steps=model_config.target_steps,
         output_channels=model_config.output_channels,
         hidden_dim=output_head_config.hidden_dim,
@@ -805,6 +971,43 @@ def main() -> None:
     trainable_params = sum(
         parameter.numel() for parameter in model.parameters() if parameter.requires_grad
     )
+    mlp_parameter_counts = None
+    if architecture == "htq_fusion_time_height_mlp":
+        frontend_modules = [
+            model.tokenizer,
+            model.meteo_encoder,
+            model.static_encoder,
+            model.fusion,
+        ]
+        backbone_modules = [
+            model.input_projection,
+            model.mixer_blocks,
+            model.backbone_output_norm,
+        ]
+        target_modules = [
+            model.target_projection,
+            model.target_time_embedding,
+        ]
+        mlp_parameter_counts = {
+            "frontend_params": sum(
+                parameter.numel()
+                for module in frontend_modules
+                if module is not None
+                for parameter in module.parameters()
+            ),
+            "mixer_backbone_params": sum(
+                parameter.numel()
+                for module in backbone_modules
+                for parameter in module.parameters()
+            ),
+            "target_projection_params": sum(
+                parameter.numel()
+                for module in target_modules
+                if module is not None
+                for parameter in module.parameters()
+            ),
+            "output_head_params": output_head_params,
+        }
     input_token_count = model_config.context_hours * model_config.height_levels
     target_token_count = model_config.target_steps * model_config.height_levels
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -841,8 +1044,31 @@ def main() -> None:
     print(f"total_params: {total_params}")
     print(f"trainable_params: {trainable_params}")
     print(f"d_model: {model_config.d_model}")
-    print(f"nhead: {model_config.nhead}")
-    print(f"num_encoder_layers: {model_config.num_encoder_layers}")
+    if architecture == "htq_fusion_time_height_mlp":
+        print(f"fusion_d_model: {model_config.d_model}")
+        print(f"mlp_d_model: {model_config.mlp_d_model}")
+        print(f"num_mixer_blocks: {model_config.num_mixer_blocks}")
+        print(
+            "temporal_mixing_hidden_dim: "
+            f"{model_config.temporal_mixing_hidden_dim}"
+        )
+        print(
+            "height_mixing_hidden_dim: "
+            f"{model_config.height_mixing_hidden_dim}"
+        )
+        print(
+            "channel_expansion_ratio: "
+            f"{model_config.channel_expansion_ratio}"
+        )
+        print(
+            "target_projection_hidden_dim: "
+            f"{model_config.target_projection_hidden_dim}"
+        )
+        for name, count in mlp_parameter_counts.items():
+            print(f"{name}: {count}")
+    else:
+        print(f"nhead: {model_config.nhead}")
+        print(f"num_encoder_layers: {model_config.num_encoder_layers}")
     print(f"input_token_count: {input_token_count}")
     print(f"target_token_count: {target_token_count}")
     print(f"total_token_count: {input_token_count + target_token_count}")
@@ -902,6 +1128,7 @@ def main() -> None:
         "status": "running",
         "config": str(args.config),
         "dataset_dir": str(dataset_dir),
+        "dataset_metadata": dataset_metadata,
         "run_dir": str(run_dir),
         "seed": seed,
         "batch_size": batch_size,
@@ -921,6 +1148,7 @@ def main() -> None:
         "identical_horizon_init": output_head_config.identical_horizon_init,
         "total_params": total_params,
         "trainable_params": trainable_params,
+        "mlp_parameter_counts": mlp_parameter_counts,
         "loss_config": loss_config,
         "loss_weights": {
             "lambda_wind": float(loss_config["lambda_wind"]),
@@ -1009,6 +1237,7 @@ def main() -> None:
                 loss_config,
                 scheduler=scheduler,
                 norm_stats=norm_stats,
+                dataset_metadata=dataset_metadata,
             )
             maybe_save_named_checkpoints(
                 run_dir,
@@ -1022,6 +1251,7 @@ def main() -> None:
                 named_checkpoint_best_epochs,
                 scheduler=scheduler,
                 norm_stats=norm_stats,
+                dataset_metadata=dataset_metadata,
             )
             monitor_name = str(early_stopping["monitor"])
             if monitor_name not in val_metrics:
@@ -1043,6 +1273,7 @@ def main() -> None:
                     loss_config,
                     scheduler=scheduler,
                     norm_stats=norm_stats,
+                    dataset_metadata=dataset_metadata,
                 )
             else:
                 epochs_without_improvement += 1

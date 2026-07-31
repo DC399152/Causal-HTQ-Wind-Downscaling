@@ -63,6 +63,7 @@ class MeteoConfig:
     variables: dict[str, Any]
     channel_names: tuple[str, ...]
     expected_pressure_levels_hpa: tuple[float, ...]
+    require_complete_context: bool = False
 
 
 @dataclass(frozen=True)
@@ -220,6 +221,7 @@ def parse_preprocessing_config(path: str | Path) -> PreprocessingConfig:
             expected_pressure_levels_hpa=tuple(
                 float(v) for v in meteo_cfg.get("expected_pressure_levels_hpa", ())
             ),
+            require_complete_context=bool(meteo_cfg.get("require_complete_context", False)),
         ),
         static_features=StaticFeatureConfig(
             use_lcz=bool(static_cfg.get("use_lcz", False)),

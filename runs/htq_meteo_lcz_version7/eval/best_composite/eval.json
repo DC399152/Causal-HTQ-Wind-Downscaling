@@ -1,8 +1,18 @@
 {
   "checkpoint": "runs/htq_meteo_lcz_version7/best_composite.pt",
-  "dataset_dir": "data/datasets/paris_dufeng_1h_to_10min_12h",
+  "dataset_dir": "data\\datasets\\paris_dufeng_1h_to_10min_12h",
   "device": "cuda",
   "checkpoint_epoch": 15,
+  "architecture": "htq_encoder_decoder",
+  "output_head_type": "shared_linear",
+  "output_head_config": {
+    "type": "shared_linear",
+    "hidden_dim": 64,
+    "dropout": 0.05,
+    "final_weight_std": 0.001,
+    "identical_horizon_init": true,
+    "share_across_heights": true
+  },
   "loss_config": {
     "type": "residual_physics",
     "lambda_temporal": 0.25,
@@ -81,11 +91,13 @@
       "u_MAE_ms": 0.7602229945580934,
       "v_MAE_ms": 0.6725797026076263,
       "speed_MAE_ms": 0.7138221379280186,
+      "global_flattened_ACC": 0.9860710125911823,
       "residual_ACC": 0.22424225129831724,
       "temporal_gradient_MAE_ms": 0.944254141222552,
       "temporal_gradient_ACC": 0.06394912285052272,
       "valid_target_values": 296570.0,
       "valid_speed_values": 148285.0,
+      "valid_global_flattened_values": 296570.0,
       "valid_temporal_gradients": 246056.0,
       "valid_residual_acc_series": 49700.0,
       "valid_temporal_gradient_acc_series": 49637.0
@@ -115,11 +127,13 @@
       "u_MAE_ms": 0.6960632463173113,
       "v_MAE_ms": 0.6378437210203443,
       "speed_MAE_ms": 0.6636112779225857,
+      "global_flattened_ACC": 0.9887611415179777,
       "residual_ACC": 0.19261083834871276,
       "temporal_gradient_MAE_ms": 0.8835538739936449,
       "temporal_gradient_ACC": 0.056382061419363305,
       "valid_target_values": 278482.0,
       "valid_speed_values": 139241.0,
+      "valid_global_flattened_values": 278482.0,
       "valid_temporal_gradients": 231156.0,
       "valid_residual_acc_series": 46704.0,
       "valid_temporal_gradient_acc_series": 46607.0

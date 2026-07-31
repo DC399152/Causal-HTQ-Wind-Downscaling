@@ -1,0 +1,808 @@
+{
+  "dataset_dir": "data\\datasets\\paris_1h_to_10min_12h",
+  "split": "test",
+  "seed": 42,
+  "requested_samples": 100,
+  "selected_samples": [
+    {
+      "rank": 1,
+      "local_index": 2769,
+      "sample_index": 39052,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-23T17:00",
+      "file": "sample_001_local_002769.png"
+    },
+    {
+      "rank": 2,
+      "local_index": 2824,
+      "sample_index": 39107,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-26T00:00",
+      "file": "sample_002_local_002824.png"
+    },
+    {
+      "rank": 3,
+      "local_index": 1812,
+      "sample_index": 22018,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-22T20:00",
+      "file": "sample_003_local_001812.png"
+    },
+    {
+      "rank": 4,
+      "local_index": 17,
+      "sample_index": 2321,
+      "station_id": "PAARBO",
+      "target_time_start": "2024-02-04T04:00",
+      "file": "sample_004_local_000017.png"
+    },
+    {
+      "rank": 5,
+      "local_index": 987,
+      "sample_index": 16633,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-01T10:00",
+      "file": "sample_005_local_000987.png"
+    },
+    {
+      "rank": 6,
+      "local_index": 1366,
+      "sample_index": 17012,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-18T18:00",
+      "file": "sample_006_local_001366.png"
+    },
+    {
+      "rank": 7,
+      "local_index": 339,
+      "sample_index": 6035,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-15T22:00",
+      "file": "sample_007_local_000339.png"
+    },
+    {
+      "rank": 8,
+      "local_index": 1743,
+      "sample_index": 21949,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-16T10:00",
+      "file": "sample_008_local_001743.png"
+    },
+    {
+      "rank": 9,
+      "local_index": 423,
+      "sample_index": 6119,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-19T12:00",
+      "file": "sample_009_local_000423.png"
+    },
+    {
+      "rank": 10,
+      "local_index": 1528,
+      "sample_index": 17174,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-26T17:00",
+      "file": "sample_010_local_001528.png"
+    },
+    {
+      "rank": 11,
+      "local_index": 3454,
+      "sample_index": 39737,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-09T08:00",
+      "file": "sample_011_local_003454.png"
+    },
+    {
+      "rank": 12,
+      "local_index": 1905,
+      "sample_index": 22111,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-27T08:00",
+      "file": "sample_012_local_001905.png"
+    },
+    {
+      "rank": 13,
+      "local_index": 467,
+      "sample_index": 6163,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-22T06:00",
+      "file": "sample_013_local_000467.png"
+    },
+    {
+      "rank": 14,
+      "local_index": 2737,
+      "sample_index": 39020,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-22T09:00",
+      "file": "sample_014_local_002737.png"
+    },
+    {
+      "rank": 15,
+      "local_index": 2696,
+      "sample_index": 38979,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-20T16:00",
+      "file": "sample_015_local_002696.png"
+    },
+    {
+      "rank": 16,
+      "local_index": 2027,
+      "sample_index": 22233,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-02-03T23:00",
+      "file": "sample_016_local_002027.png"
+    },
+    {
+      "rank": 17,
+      "local_index": 1016,
+      "sample_index": 16662,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-03T05:00",
+      "file": "sample_017_local_001016.png"
+    },
+    {
+      "rank": 18,
+      "local_index": 3720,
+      "sample_index": 40003,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-27T08:00",
+      "file": "sample_018_local_003720.png"
+    },
+    {
+      "rank": 19,
+      "local_index": 3280,
+      "sample_index": 39563,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-27T07:00",
+      "file": "sample_019_local_003280.png"
+    },
+    {
+      "rank": 20,
+      "local_index": 1205,
+      "sample_index": 16851,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-11T04:00",
+      "file": "sample_020_local_001205.png"
+    },
+    {
+      "rank": 21,
+      "local_index": 1059,
+      "sample_index": 16705,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-05T00:00",
+      "file": "sample_021_local_001059.png"
+    },
+    {
+      "rank": 22,
+      "local_index": 3413,
+      "sample_index": 39696,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-06T13:00",
+      "file": "sample_022_local_003413.png"
+    },
+    {
+      "rank": 23,
+      "local_index": 3002,
+      "sample_index": 39285,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-05T23:00",
+      "file": "sample_023_local_003002.png"
+    },
+    {
+      "rank": 24,
+      "local_index": 334,
+      "sample_index": 6030,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-14T19:00",
+      "file": "sample_024_local_000334.png"
+    },
+    {
+      "rank": 25,
+      "local_index": 2023,
+      "sample_index": 22229,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-02-03T19:00",
+      "file": "sample_025_local_002023.png"
+    },
+    {
+      "rank": 26,
+      "local_index": 2798,
+      "sample_index": 39081,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-24T22:00",
+      "file": "sample_026_local_002798.png"
+    },
+    {
+      "rank": 27,
+      "local_index": 2701,
+      "sample_index": 38984,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-20T21:00",
+      "file": "sample_027_local_002701.png"
+    },
+    {
+      "rank": 28,
+      "local_index": 3036,
+      "sample_index": 39319,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-07T09:00",
+      "file": "sample_028_local_003036.png"
+    },
+    {
+      "rank": 29,
+      "local_index": 1840,
+      "sample_index": 22046,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-24T00:00",
+      "file": "sample_029_local_001840.png"
+    },
+    {
+      "rank": 30,
+      "local_index": 2250,
+      "sample_index": 28205,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-11T15:00",
+      "file": "sample_030_local_002250.png"
+    },
+    {
+      "rank": 31,
+      "local_index": 781,
+      "sample_index": 16427,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-16T11:00",
+      "file": "sample_031_local_000781.png"
+    },
+    {
+      "rank": 32,
+      "local_index": 3659,
+      "sample_index": 39942,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-21T11:00",
+      "file": "sample_032_local_003659.png"
+    },
+    {
+      "rank": 33,
+      "local_index": 2442,
+      "sample_index": 28397,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-22T03:00",
+      "file": "sample_033_local_002442.png"
+    },
+    {
+      "rank": 34,
+      "local_index": 112,
+      "sample_index": 2416,
+      "station_id": "PAARBO",
+      "target_time_start": "2024-02-16T17:00",
+      "file": "sample_034_local_000112.png"
+    },
+    {
+      "rank": 35,
+      "local_index": 2533,
+      "sample_index": 28488,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-25T23:00",
+      "file": "sample_035_local_002533.png"
+    },
+    {
+      "rank": 36,
+      "local_index": 2127,
+      "sample_index": 28082,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-05T18:00",
+      "file": "sample_036_local_002127.png"
+    },
+    {
+      "rank": 37,
+      "local_index": 2547,
+      "sample_index": 28502,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-26T13:00",
+      "file": "sample_037_local_002547.png"
+    },
+    {
+      "rank": 38,
+      "local_index": 2847,
+      "sample_index": 39130,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-28T15:00",
+      "file": "sample_038_local_002847.png"
+    },
+    {
+      "rank": 39,
+      "local_index": 75,
+      "sample_index": 2379,
+      "station_id": "PAARBO",
+      "target_time_start": "2024-02-07T06:00",
+      "file": "sample_039_local_000075.png"
+    },
+    {
+      "rank": 40,
+      "local_index": 3085,
+      "sample_index": 39368,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-09T10:00",
+      "file": "sample_040_local_003085.png"
+    },
+    {
+      "rank": 41,
+      "local_index": 939,
+      "sample_index": 16585,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-27T01:00",
+      "file": "sample_041_local_000939.png"
+    },
+    {
+      "rank": 42,
+      "local_index": 3005,
+      "sample_index": 39288,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-06T02:00",
+      "file": "sample_042_local_003005.png"
+    },
+    {
+      "rank": 43,
+      "local_index": 1841,
+      "sample_index": 22047,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-24T01:00",
+      "file": "sample_043_local_001841.png"
+    },
+    {
+      "rank": 44,
+      "local_index": 762,
+      "sample_index": 16408,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-15T16:00",
+      "file": "sample_044_local_000762.png"
+    },
+    {
+      "rank": 45,
+      "local_index": 1310,
+      "sample_index": 16956,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-16T08:00",
+      "file": "sample_045_local_001310.png"
+    },
+    {
+      "rank": 46,
+      "local_index": 3790,
+      "sample_index": 40073,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-03-04T13:00",
+      "file": "sample_046_local_003790.png"
+    },
+    {
+      "rank": 47,
+      "local_index": 1692,
+      "sample_index": 21898,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-12T07:00",
+      "file": "sample_047_local_001692.png"
+    },
+    {
+      "rank": 48,
+      "local_index": 3309,
+      "sample_index": 39592,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-30T04:00",
+      "file": "sample_048_local_003309.png"
+    },
+    {
+      "rank": 49,
+      "local_index": 2481,
+      "sample_index": 28436,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-23T19:00",
+      "file": "sample_049_local_002481.png"
+    },
+    {
+      "rank": 50,
+      "local_index": 824,
+      "sample_index": 16470,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-19T10:00",
+      "file": "sample_050_local_000824.png"
+    },
+    {
+      "rank": 51,
+      "local_index": 1934,
+      "sample_index": 22140,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-29T23:00",
+      "file": "sample_051_local_001934.png"
+    },
+    {
+      "rank": 52,
+      "local_index": 760,
+      "sample_index": 16406,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-15T14:00",
+      "file": "sample_052_local_000760.png"
+    },
+    {
+      "rank": 53,
+      "local_index": 1292,
+      "sample_index": 16938,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-15T00:00",
+      "file": "sample_053_local_001292.png"
+    },
+    {
+      "rank": 54,
+      "local_index": 542,
+      "sample_index": 6238,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-28T13:00",
+      "file": "sample_054_local_000542.png"
+    },
+    {
+      "rank": 55,
+      "local_index": 1762,
+      "sample_index": 21968,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-18T17:00",
+      "file": "sample_055_local_001762.png"
+    },
+    {
+      "rank": 56,
+      "local_index": 1742,
+      "sample_index": 21948,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-16T09:00",
+      "file": "sample_056_local_001742.png"
+    },
+    {
+      "rank": 57,
+      "local_index": 921,
+      "sample_index": 16567,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-26T06:00",
+      "file": "sample_057_local_000921.png"
+    },
+    {
+      "rank": 58,
+      "local_index": 3351,
+      "sample_index": 39634,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-02T04:00",
+      "file": "sample_058_local_003351.png"
+    },
+    {
+      "rank": 59,
+      "local_index": 3141,
+      "sample_index": 39424,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-15T07:00",
+      "file": "sample_059_local_003141.png"
+    },
+    {
+      "rank": 60,
+      "local_index": 1151,
+      "sample_index": 16797,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-08T20:00",
+      "file": "sample_060_local_001151.png"
+    },
+    {
+      "rank": 61,
+      "local_index": 1535,
+      "sample_index": 17181,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-27T00:00",
+      "file": "sample_061_local_001535.png"
+    },
+    {
+      "rank": 62,
+      "local_index": 2895,
+      "sample_index": 39178,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-30T18:00",
+      "file": "sample_062_local_002895.png"
+    },
+    {
+      "rank": 63,
+      "local_index": 1327,
+      "sample_index": 16973,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-17T02:00",
+      "file": "sample_063_local_001327.png"
+    },
+    {
+      "rank": 64,
+      "local_index": 1843,
+      "sample_index": 22049,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-24T03:00",
+      "file": "sample_064_local_001843.png"
+    },
+    {
+      "rank": 65,
+      "local_index": 1498,
+      "sample_index": 17144,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-25T08:00",
+      "file": "sample_065_local_001498.png"
+    },
+    {
+      "rank": 66,
+      "local_index": 1768,
+      "sample_index": 21974,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-18T23:00",
+      "file": "sample_066_local_001768.png"
+    },
+    {
+      "rank": 67,
+      "local_index": 2195,
+      "sample_index": 28150,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-09T07:00",
+      "file": "sample_067_local_002195.png"
+    },
+    {
+      "rank": 68,
+      "local_index": 2667,
+      "sample_index": 28622,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-12-05T08:00",
+      "file": "sample_068_local_002667.png"
+    },
+    {
+      "rank": 69,
+      "local_index": 2874,
+      "sample_index": 39157,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-29T18:00",
+      "file": "sample_069_local_002874.png"
+    },
+    {
+      "rank": 70,
+      "local_index": 1122,
+      "sample_index": 16768,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-07T15:00",
+      "file": "sample_070_local_001122.png"
+    },
+    {
+      "rank": 71,
+      "local_index": 3078,
+      "sample_index": 39361,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-09T03:00",
+      "file": "sample_071_local_003078.png"
+    },
+    {
+      "rank": 72,
+      "local_index": 368,
+      "sample_index": 6064,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-17T04:00",
+      "file": "sample_072_local_000368.png"
+    },
+    {
+      "rank": 73,
+      "local_index": 1258,
+      "sample_index": 16904,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-13T09:00",
+      "file": "sample_073_local_001258.png"
+    },
+    {
+      "rank": 74,
+      "local_index": 2306,
+      "sample_index": 28261,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-14T22:00",
+      "file": "sample_074_local_002306.png"
+    },
+    {
+      "rank": 75,
+      "local_index": 1038,
+      "sample_index": 16684,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-04T03:00",
+      "file": "sample_075_local_001038.png"
+    },
+    {
+      "rank": 76,
+      "local_index": 3660,
+      "sample_index": 39943,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-21T12:00",
+      "file": "sample_076_local_003660.png"
+    },
+    {
+      "rank": 77,
+      "local_index": 424,
+      "sample_index": 6120,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-19T13:00",
+      "file": "sample_077_local_000424.png"
+    },
+    {
+      "rank": 78,
+      "local_index": 2004,
+      "sample_index": 22210,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-02-01T23:00",
+      "file": "sample_078_local_002004.png"
+    },
+    {
+      "rank": 79,
+      "local_index": 3136,
+      "sample_index": 39419,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-12T14:00",
+      "file": "sample_079_local_003136.png"
+    },
+    {
+      "rank": 80,
+      "local_index": 642,
+      "sample_index": 16288,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-01-06T05:00",
+      "file": "sample_080_local_000642.png"
+    },
+    {
+      "rank": 81,
+      "local_index": 293,
+      "sample_index": 5989,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-11T21:00",
+      "file": "sample_081_local_000293.png"
+    },
+    {
+      "rank": 82,
+      "local_index": 3694,
+      "sample_index": 39977,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-02-23T22:00",
+      "file": "sample_082_local_003694.png"
+    },
+    {
+      "rank": 83,
+      "local_index": 1400,
+      "sample_index": 17046,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-21T03:00",
+      "file": "sample_083_local_001400.png"
+    },
+    {
+      "rank": 84,
+      "local_index": 1706,
+      "sample_index": 21912,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-14T21:00",
+      "file": "sample_084_local_001706.png"
+    },
+    {
+      "rank": 85,
+      "local_index": 1300,
+      "sample_index": 16946,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-15T22:00",
+      "file": "sample_085_local_001300.png"
+    },
+    {
+      "rank": 86,
+      "local_index": 2869,
+      "sample_index": 39152,
+      "station_id": "PASIRT",
+      "target_time_start": "2023-12-29T13:00",
+      "file": "sample_086_local_002869.png"
+    },
+    {
+      "rank": 87,
+      "local_index": 1254,
+      "sample_index": 16900,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-13T05:00",
+      "file": "sample_087_local_001254.png"
+    },
+    {
+      "rank": 88,
+      "local_index": 1491,
+      "sample_index": 17137,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-24T23:00",
+      "file": "sample_088_local_001491.png"
+    },
+    {
+      "rank": 89,
+      "local_index": 1658,
+      "sample_index": 21864,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-10T21:00",
+      "file": "sample_089_local_001658.png"
+    },
+    {
+      "rank": 90,
+      "local_index": 2334,
+      "sample_index": 28289,
+      "station_id": "PAROIS",
+      "target_time_start": "2023-11-16T02:00",
+      "file": "sample_090_local_002334.png"
+    },
+    {
+      "rank": 91,
+      "local_index": 2085,
+      "sample_index": 22291,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-02-06T09:00",
+      "file": "sample_091_local_002085.png"
+    },
+    {
+      "rank": 92,
+      "local_index": 1758,
+      "sample_index": 21964,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-01-17T01:00",
+      "file": "sample_092_local_001758.png"
+    },
+    {
+      "rank": 93,
+      "local_index": 1175,
+      "sample_index": 16821,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-09T20:00",
+      "file": "sample_093_local_001175.png"
+    },
+    {
+      "rank": 94,
+      "local_index": 2072,
+      "sample_index": 22278,
+      "station_id": "PALUPD",
+      "target_time_start": "2024-02-05T20:00",
+      "file": "sample_094_local_002072.png"
+    },
+    {
+      "rank": 95,
+      "local_index": 456,
+      "sample_index": 6152,
+      "station_id": "PACHEM",
+      "target_time_start": "2024-02-21T17:00",
+      "file": "sample_095_local_000456.png"
+    },
+    {
+      "rank": 96,
+      "local_index": 1276,
+      "sample_index": 16922,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-14T08:00",
+      "file": "sample_096_local_001276.png"
+    },
+    {
+      "rank": 97,
+      "local_index": 3796,
+      "sample_index": 40079,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-03-04T19:00",
+      "file": "sample_097_local_003796.png"
+    },
+    {
+      "rank": 98,
+      "local_index": 2916,
+      "sample_index": 39199,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-01T03:00",
+      "file": "sample_098_local_002916.png"
+    },
+    {
+      "rank": 99,
+      "local_index": 3214,
+      "sample_index": 39497,
+      "station_id": "PASIRT",
+      "target_time_start": "2024-01-22T18:00",
+      "file": "sample_099_local_003214.png"
+    },
+    {
+      "rank": 100,
+      "local_index": 1127,
+      "sample_index": 16773,
+      "station_id": "PAJUSS",
+      "target_time_start": "2024-02-07T20:00",
+      "file": "sample_100_local_001127.png"
+    }
+  ]
+}

@@ -7,7 +7,15 @@ from typing import Any, Mapping
 
 from torch import nn
 
+from src.models.htq_cross_attention_reader import (
+    CrossAttentionReaderConfig,
+    HTQCrossAttentionReader,
+)
 from src.models.htq_encoder_only import EncoderOnlyConfig, HTQTargetTokenEncoderOnly
+from src.models.htq_fusion_time_height_mlp import (
+    FusionTimeHeightMLPConfig,
+    HTQFusionTimeHeightMLP,
+)
 from src.models.htq_transformer import CausalHTQTransformer, HTQConfig
 from src.models.output_heads import (
     output_head_config_fields,
@@ -15,7 +23,12 @@ from src.models.output_heads import (
 )
 
 
-ModelConfig = HTQConfig | EncoderOnlyConfig
+ModelConfig = (
+    HTQConfig
+    | EncoderOnlyConfig
+    | CrossAttentionReaderConfig
+    | FusionTimeHeightMLPConfig
+)
 
 
 def architecture_from_config(config: ModelConfig | Mapping[str, Any]) -> str:
@@ -33,11 +46,11 @@ def model_config_from_dict(config: Mapping[str, Any]) -> ModelConfig:
     config = dict(config)
     nested_output_head = config.get("output_head")
     if isinstance(nested_output_head, Mapping):
-        default_type = (
-            "shared_mlp"
-            if architecture == "htq_target_token_encoder_only"
-            else "shared_linear"
-        )
+        default_type = {
+            "htq_target_token_encoder_only": "shared_mlp",
+            "htq_cross_attention_reader": "multi_horizon_shared_trunk",
+            "htq_fusion_time_height_mlp": "multi_horizon_shared_trunk",
+        }.get(architecture, "shared_linear")
         config.update(
             output_head_config_fields(
                 residual_head_config_from_mapping(
@@ -65,9 +78,27 @@ def model_config_from_dict(config: Mapping[str, Any]) -> ModelConfig:
         if "meteo_pressure_levels_hpa" in payload:
             payload["meteo_pressure_levels_hpa"] = tuple(payload["meteo_pressure_levels_hpa"])
         return EncoderOnlyConfig(**payload)
+    if architecture == "htq_cross_attention_reader":
+        allowed = {field.name for field in fields(CrossAttentionReaderConfig)}
+        payload = {key: value for key, value in config.items() if key in allowed}
+        payload["architecture"] = architecture
+        for key in ("meteo_pressure_levels_hpa", "query_trend_scales"):
+            if key in payload:
+                payload[key] = tuple(payload[key])
+        return CrossAttentionReaderConfig(**payload)
+    if architecture == "htq_fusion_time_height_mlp":
+        allowed = {field.name for field in fields(FusionTimeHeightMLPConfig)}
+        payload = {key: value for key, value in config.items() if key in allowed}
+        payload["architecture"] = architecture
+        if "meteo_pressure_levels_hpa" in payload:
+            payload["meteo_pressure_levels_hpa"] = tuple(
+                payload["meteo_pressure_levels_hpa"]
+            )
+        return FusionTimeHeightMLPConfig(**payload)
     raise ValueError(
         f"Unknown model architecture {architecture!r}; expected "
-        "'htq_encoder_decoder' or 'htq_target_token_encoder_only'"
+        "'htq_encoder_decoder', 'htq_target_token_encoder_only', or "
+        "'htq_cross_attention_reader', or 'htq_fusion_time_height_mlp'"
     )
 
 
@@ -84,4 +115,18 @@ def build_model(config: ModelConfig | Mapping[str, Any]) -> nn.Module:
         if not isinstance(resolved, EncoderOnlyConfig):
             raise TypeError("Encoder-only architecture requires EncoderOnlyConfig")
         return HTQTargetTokenEncoderOnly(resolved)
+    if architecture == "htq_cross_attention_reader":
+        if not isinstance(resolved, CrossAttentionReaderConfig):
+            raise TypeError(
+                "Cross-attention Reader architecture requires "
+                "CrossAttentionReaderConfig"
+            )
+        return HTQCrossAttentionReader(resolved)
+    if architecture == "htq_fusion_time_height_mlp":
+        if not isinstance(resolved, FusionTimeHeightMLPConfig):
+            raise TypeError(
+                "Fusion time-height MLP architecture requires "
+                "FusionTimeHeightMLPConfig"
+            )
+        return HTQFusionTimeHeightMLP(resolved)
     raise ValueError(f"Unknown model architecture {architecture!r}")

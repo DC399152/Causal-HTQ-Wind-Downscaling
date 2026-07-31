@@ -1,0 +1,808 @@
+{
+  "dataset_dir": "data\\datasets\\dufeng_1h_to_10min_12h_7_17",
+  "split": "test",
+  "seed": 42,
+  "requested_samples": 100,
+  "selected_samples": [
+    {
+      "rank": 1,
+      "local_index": 42,
+      "sample_index": 1253,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T09:00",
+      "file": "sample_001_local_000042.png"
+    },
+    {
+      "rank": 2,
+      "local_index": 24,
+      "sample_index": 1235,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T15:00",
+      "file": "sample_002_local_000024.png"
+    },
+    {
+      "rank": 3,
+      "local_index": 164,
+      "sample_index": 1812,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T08:00",
+      "file": "sample_003_local_000164.png"
+    },
+    {
+      "rank": 4,
+      "local_index": 124,
+      "sample_index": 1335,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T19:00",
+      "file": "sample_004_local_000124.png"
+    },
+    {
+      "rank": 5,
+      "local_index": 94,
+      "sample_index": 1305,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T13:00",
+      "file": "sample_005_local_000094.png"
+    },
+    {
+      "rank": 6,
+      "local_index": 15,
+      "sample_index": 1226,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T06:00",
+      "file": "sample_006_local_000015.png"
+    },
+    {
+      "rank": 7,
+      "local_index": 4,
+      "sample_index": 1215,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T19:00",
+      "file": "sample_007_local_000004.png"
+    },
+    {
+      "rank": 8,
+      "local_index": 38,
+      "sample_index": 1249,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T05:00",
+      "file": "sample_008_local_000038.png"
+    },
+    {
+      "rank": 9,
+      "local_index": 158,
+      "sample_index": 1806,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T02:00",
+      "file": "sample_009_local_000158.png"
+    },
+    {
+      "rank": 10,
+      "local_index": 155,
+      "sample_index": 1366,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-23T02:00",
+      "file": "sample_010_local_000155.png"
+    },
+    {
+      "rank": 11,
+      "local_index": 138,
+      "sample_index": 1349,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T09:00",
+      "file": "sample_011_local_000138.png"
+    },
+    {
+      "rank": 12,
+      "local_index": 78,
+      "sample_index": 1289,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T21:00",
+      "file": "sample_012_local_000078.png"
+    },
+    {
+      "rank": 13,
+      "local_index": 8,
+      "sample_index": 1219,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T23:00",
+      "file": "sample_013_local_000008.png"
+    },
+    {
+      "rank": 14,
+      "local_index": 90,
+      "sample_index": 1301,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T09:00",
+      "file": "sample_014_local_000090.png"
+    },
+    {
+      "rank": 15,
+      "local_index": 133,
+      "sample_index": 1344,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T04:00",
+      "file": "sample_015_local_000133.png"
+    },
+    {
+      "rank": 16,
+      "local_index": 37,
+      "sample_index": 1248,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T04:00",
+      "file": "sample_016_local_000037.png"
+    },
+    {
+      "rank": 17,
+      "local_index": 151,
+      "sample_index": 1362,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T22:00",
+      "file": "sample_017_local_000151.png"
+    },
+    {
+      "rank": 18,
+      "local_index": 28,
+      "sample_index": 1239,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T19:00",
+      "file": "sample_018_local_000028.png"
+    },
+    {
+      "rank": 19,
+      "local_index": 21,
+      "sample_index": 1232,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T12:00",
+      "file": "sample_019_local_000021.png"
+    },
+    {
+      "rank": 20,
+      "local_index": 134,
+      "sample_index": 1345,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T05:00",
+      "file": "sample_020_local_000134.png"
+    },
+    {
+      "rank": 21,
+      "local_index": 169,
+      "sample_index": 1817,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T13:00",
+      "file": "sample_021_local_000169.png"
+    },
+    {
+      "rank": 22,
+      "local_index": 107,
+      "sample_index": 1318,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T02:00",
+      "file": "sample_022_local_000107.png"
+    },
+    {
+      "rank": 23,
+      "local_index": 18,
+      "sample_index": 1229,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T09:00",
+      "file": "sample_023_local_000018.png"
+    },
+    {
+      "rank": 24,
+      "local_index": 126,
+      "sample_index": 1337,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T21:00",
+      "file": "sample_024_local_000126.png"
+    },
+    {
+      "rank": 25,
+      "local_index": 9,
+      "sample_index": 1220,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T00:00",
+      "file": "sample_025_local_000009.png"
+    },
+    {
+      "rank": 26,
+      "local_index": 168,
+      "sample_index": 1816,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T12:00",
+      "file": "sample_026_local_000168.png"
+    },
+    {
+      "rank": 27,
+      "local_index": 27,
+      "sample_index": 1238,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T18:00",
+      "file": "sample_027_local_000027.png"
+    },
+    {
+      "rank": 28,
+      "local_index": 63,
+      "sample_index": 1274,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T06:00",
+      "file": "sample_028_local_000063.png"
+    },
+    {
+      "rank": 29,
+      "local_index": 91,
+      "sample_index": 1302,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T10:00",
+      "file": "sample_029_local_000091.png"
+    },
+    {
+      "rank": 30,
+      "local_index": 137,
+      "sample_index": 1348,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T08:00",
+      "file": "sample_030_local_000137.png"
+    },
+    {
+      "rank": 31,
+      "local_index": 102,
+      "sample_index": 1313,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T21:00",
+      "file": "sample_031_local_000102.png"
+    },
+    {
+      "rank": 32,
+      "local_index": 140,
+      "sample_index": 1351,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T11:00",
+      "file": "sample_032_local_000140.png"
+    },
+    {
+      "rank": 33,
+      "local_index": 1,
+      "sample_index": 1212,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T16:00",
+      "file": "sample_033_local_000001.png"
+    },
+    {
+      "rank": 34,
+      "local_index": 3,
+      "sample_index": 1214,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T18:00",
+      "file": "sample_034_local_000003.png"
+    },
+    {
+      "rank": 35,
+      "local_index": 131,
+      "sample_index": 1342,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T02:00",
+      "file": "sample_035_local_000131.png"
+    },
+    {
+      "rank": 36,
+      "local_index": 84,
+      "sample_index": 1295,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T03:00",
+      "file": "sample_036_local_000084.png"
+    },
+    {
+      "rank": 37,
+      "local_index": 47,
+      "sample_index": 1258,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T14:00",
+      "file": "sample_037_local_000047.png"
+    },
+    {
+      "rank": 38,
+      "local_index": 174,
+      "sample_index": 1822,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T18:00",
+      "file": "sample_038_local_000174.png"
+    },
+    {
+      "rank": 39,
+      "local_index": 5,
+      "sample_index": 1216,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T20:00",
+      "file": "sample_039_local_000005.png"
+    },
+    {
+      "rank": 40,
+      "local_index": 114,
+      "sample_index": 1325,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T09:00",
+      "file": "sample_040_local_000114.png"
+    },
+    {
+      "rank": 41,
+      "local_index": 166,
+      "sample_index": 1814,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T10:00",
+      "file": "sample_041_local_000166.png"
+    },
+    {
+      "rank": 42,
+      "local_index": 105,
+      "sample_index": 1316,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T00:00",
+      "file": "sample_042_local_000105.png"
+    },
+    {
+      "rank": 43,
+      "local_index": 139,
+      "sample_index": 1350,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T10:00",
+      "file": "sample_043_local_000139.png"
+    },
+    {
+      "rank": 44,
+      "local_index": 33,
+      "sample_index": 1244,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T00:00",
+      "file": "sample_044_local_000033.png"
+    },
+    {
+      "rank": 45,
+      "local_index": 111,
+      "sample_index": 1322,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T06:00",
+      "file": "sample_045_local_000111.png"
+    },
+    {
+      "rank": 46,
+      "local_index": 143,
+      "sample_index": 1354,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T14:00",
+      "file": "sample_046_local_000143.png"
+    },
+    {
+      "rank": 47,
+      "local_index": 171,
+      "sample_index": 1819,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T15:00",
+      "file": "sample_047_local_000171.png"
+    },
+    {
+      "rank": 48,
+      "local_index": 25,
+      "sample_index": 1236,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T16:00",
+      "file": "sample_048_local_000025.png"
+    },
+    {
+      "rank": 49,
+      "local_index": 57,
+      "sample_index": 1268,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T00:00",
+      "file": "sample_049_local_000057.png"
+    },
+    {
+      "rank": 50,
+      "local_index": 113,
+      "sample_index": 1324,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T08:00",
+      "file": "sample_050_local_000113.png"
+    },
+    {
+      "rank": 51,
+      "local_index": 80,
+      "sample_index": 1291,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T23:00",
+      "file": "sample_051_local_000080.png"
+    },
+    {
+      "rank": 52,
+      "local_index": 46,
+      "sample_index": 1257,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T13:00",
+      "file": "sample_052_local_000046.png"
+    },
+    {
+      "rank": 53,
+      "local_index": 30,
+      "sample_index": 1241,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T21:00",
+      "file": "sample_053_local_000030.png"
+    },
+    {
+      "rank": 54,
+      "local_index": 104,
+      "sample_index": 1315,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T23:00",
+      "file": "sample_054_local_000104.png"
+    },
+    {
+      "rank": 55,
+      "local_index": 160,
+      "sample_index": 1808,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T04:00",
+      "file": "sample_055_local_000160.png"
+    },
+    {
+      "rank": 56,
+      "local_index": 179,
+      "sample_index": 1827,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T23:00",
+      "file": "sample_056_local_000179.png"
+    },
+    {
+      "rank": 57,
+      "local_index": 135,
+      "sample_index": 1346,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T06:00",
+      "file": "sample_057_local_000135.png"
+    },
+    {
+      "rank": 58,
+      "local_index": 74,
+      "sample_index": 1285,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T17:00",
+      "file": "sample_058_local_000074.png"
+    },
+    {
+      "rank": 59,
+      "local_index": 96,
+      "sample_index": 1307,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T15:00",
+      "file": "sample_059_local_000096.png"
+    },
+    {
+      "rank": 60,
+      "local_index": 109,
+      "sample_index": 1320,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T04:00",
+      "file": "sample_060_local_000109.png"
+    },
+    {
+      "rank": 61,
+      "local_index": 86,
+      "sample_index": 1297,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T05:00",
+      "file": "sample_061_local_000086.png"
+    },
+    {
+      "rank": 62,
+      "local_index": 61,
+      "sample_index": 1272,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T04:00",
+      "file": "sample_062_local_000061.png"
+    },
+    {
+      "rank": 63,
+      "local_index": 2,
+      "sample_index": 1213,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T17:00",
+      "file": "sample_063_local_000002.png"
+    },
+    {
+      "rank": 64,
+      "local_index": 79,
+      "sample_index": 1290,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T22:00",
+      "file": "sample_064_local_000079.png"
+    },
+    {
+      "rank": 65,
+      "local_index": 66,
+      "sample_index": 1277,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T09:00",
+      "file": "sample_065_local_000066.png"
+    },
+    {
+      "rank": 66,
+      "local_index": 34,
+      "sample_index": 1245,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T01:00",
+      "file": "sample_066_local_000034.png"
+    },
+    {
+      "rank": 67,
+      "local_index": 41,
+      "sample_index": 1252,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T08:00",
+      "file": "sample_067_local_000041.png"
+    },
+    {
+      "rank": 68,
+      "local_index": 71,
+      "sample_index": 1282,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T14:00",
+      "file": "sample_068_local_000071.png"
+    },
+    {
+      "rank": 69,
+      "local_index": 95,
+      "sample_index": 1306,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T14:00",
+      "file": "sample_069_local_000095.png"
+    },
+    {
+      "rank": 70,
+      "local_index": 145,
+      "sample_index": 1356,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T16:00",
+      "file": "sample_070_local_000145.png"
+    },
+    {
+      "rank": 71,
+      "local_index": 29,
+      "sample_index": 1240,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T20:00",
+      "file": "sample_071_local_000029.png"
+    },
+    {
+      "rank": 72,
+      "local_index": 26,
+      "sample_index": 1237,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T17:00",
+      "file": "sample_072_local_000026.png"
+    },
+    {
+      "rank": 73,
+      "local_index": 88,
+      "sample_index": 1299,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T07:00",
+      "file": "sample_073_local_000088.png"
+    },
+    {
+      "rank": 74,
+      "local_index": 69,
+      "sample_index": 1280,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T12:00",
+      "file": "sample_074_local_000069.png"
+    },
+    {
+      "rank": 75,
+      "local_index": 43,
+      "sample_index": 1254,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T10:00",
+      "file": "sample_075_local_000043.png"
+    },
+    {
+      "rank": 76,
+      "local_index": 62,
+      "sample_index": 1273,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T05:00",
+      "file": "sample_076_local_000062.png"
+    },
+    {
+      "rank": 77,
+      "local_index": 87,
+      "sample_index": 1298,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T06:00",
+      "file": "sample_077_local_000087.png"
+    },
+    {
+      "rank": 78,
+      "local_index": 65,
+      "sample_index": 1276,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T08:00",
+      "file": "sample_078_local_000065.png"
+    },
+    {
+      "rank": 79,
+      "local_index": 176,
+      "sample_index": 1824,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T20:00",
+      "file": "sample_079_local_000176.png"
+    },
+    {
+      "rank": 80,
+      "local_index": 67,
+      "sample_index": 1278,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T10:00",
+      "file": "sample_080_local_000067.png"
+    },
+    {
+      "rank": 81,
+      "local_index": 6,
+      "sample_index": 1217,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-16T21:00",
+      "file": "sample_081_local_000006.png"
+    },
+    {
+      "rank": 82,
+      "local_index": 40,
+      "sample_index": 1251,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T07:00",
+      "file": "sample_082_local_000040.png"
+    },
+    {
+      "rank": 83,
+      "local_index": 12,
+      "sample_index": 1223,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-17T03:00",
+      "file": "sample_083_local_000012.png"
+    },
+    {
+      "rank": 84,
+      "local_index": 77,
+      "sample_index": 1288,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-19T20:00",
+      "file": "sample_084_local_000077.png"
+    },
+    {
+      "rank": 85,
+      "local_index": 130,
+      "sample_index": 1341,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-22T01:00",
+      "file": "sample_085_local_000130.png"
+    },
+    {
+      "rank": 86,
+      "local_index": 110,
+      "sample_index": 1321,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T05:00",
+      "file": "sample_086_local_000110.png"
+    },
+    {
+      "rank": 87,
+      "local_index": 97,
+      "sample_index": 1308,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T16:00",
+      "file": "sample_087_local_000097.png"
+    },
+    {
+      "rank": 88,
+      "local_index": 153,
+      "sample_index": 1364,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-23T00:00",
+      "file": "sample_088_local_000153.png"
+    },
+    {
+      "rank": 89,
+      "local_index": 103,
+      "sample_index": 1314,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T22:00",
+      "file": "sample_089_local_000103.png"
+    },
+    {
+      "rank": 90,
+      "local_index": 115,
+      "sample_index": 1326,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T10:00",
+      "file": "sample_090_local_000115.png"
+    },
+    {
+      "rank": 91,
+      "local_index": 157,
+      "sample_index": 1368,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-23T04:00",
+      "file": "sample_091_local_000157.png"
+    },
+    {
+      "rank": 92,
+      "local_index": 163,
+      "sample_index": 1811,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T07:00",
+      "file": "sample_092_local_000163.png"
+    },
+    {
+      "rank": 93,
+      "local_index": 165,
+      "sample_index": 1813,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T09:00",
+      "file": "sample_093_local_000165.png"
+    },
+    {
+      "rank": 94,
+      "local_index": 123,
+      "sample_index": 1334,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T18:00",
+      "file": "sample_094_local_000123.png"
+    },
+    {
+      "rank": 95,
+      "local_index": 159,
+      "sample_index": 1807,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T03:00",
+      "file": "sample_095_local_000159.png"
+    },
+    {
+      "rank": 96,
+      "local_index": 175,
+      "sample_index": 1823,
+      "station_id": "dufeng_site_b",
+      "target_time_start": "2026-07-17T19:00",
+      "file": "sample_096_local_000175.png"
+    },
+    {
+      "rank": 97,
+      "local_index": 121,
+      "sample_index": 1332,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T16:00",
+      "file": "sample_097_local_000121.png"
+    },
+    {
+      "rank": 98,
+      "local_index": 122,
+      "sample_index": 1333,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-21T17:00",
+      "file": "sample_098_local_000122.png"
+    },
+    {
+      "rank": 99,
+      "local_index": 89,
+      "sample_index": 1300,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-20T08:00",
+      "file": "sample_099_local_000089.png"
+    },
+    {
+      "rank": 100,
+      "local_index": 55,
+      "sample_index": 1266,
+      "station_id": "dufeng_site_a",
+      "target_time_start": "2026-06-18T22:00",
+      "file": "sample_100_local_000055.png"
+    }
+  ]
+}

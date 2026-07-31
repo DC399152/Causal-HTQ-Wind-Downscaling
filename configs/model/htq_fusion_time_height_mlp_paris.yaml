@@ -1,0 +1,119 @@
+data:
+  dataset_dir: data/datasets/paris_1h_to_10min_12h
+  context_hours: 12
+  target_steps: 6
+
+training:
+  seed: 42
+  batch_size: 64
+  max_epochs: 120
+  learning_rate: 0.0003
+  weight_decay: 0.001
+  num_workers: 0
+  gradient_clip_norm: 1.0
+  scheduler:
+    type: warmup_cosine
+    warmup_epochs: 5
+    min_learning_rate: 0.000001
+  early_stopping:
+    enabled: false
+    monitor: MAE_ms
+
+model:
+  name: htq_fusion_time_height_mlp_v1
+  architecture: htq_fusion_time_height_mlp
+  context_hours: 12
+  target_steps: 6
+  height_levels: 6
+  input_channels: 2
+  output_channels: 2
+  d_model: 128
+  mlp_d_model: 96
+  num_mixer_blocks: 3
+  temporal_mixing_hidden_dim: 32
+  height_mixing_hidden_dim: 16
+  channel_expansion_ratio: 4
+  mixer_dropout: 0.1
+  target_projection_hidden_dim: 24
+  target_projection_dropout: 0.05
+  use_target_time_embedding: true
+  include_mask_features: true
+  include_delta_features: true
+  output_head:
+    type: multi_horizon_shared_trunk
+    hidden_dim: 64
+    dropout: 0.05
+    final_weight_std: 0.001
+    identical_horizon_init: true
+    share_across_heights: true
+
+multimodal:
+  use_meteo: true
+  use_static: true
+  fusion_type: gated_cross_attention
+
+meteo:
+  input_type: pressure_level_station
+  context_hours: 12
+  pressure_levels_hpa: [1000, 975, 950, 925, 900]
+  num_pressure_levels: 5
+  num_meteo_channels: 2
+  channel_names: ["temperature", "humidity"]
+  use_delta: true
+  use_mask_channels: false
+
+static:
+  input_dim: 17
+  n_static_tokens: 1
+  encoder_type: mlp
+  hidden_dim: 128
+  dropout: 0.1
+  feature_names:
+    - LCZ_1_frac_500m
+    - LCZ_2_frac_500m
+    - LCZ_3_frac_500m
+    - LCZ_4_frac_500m
+    - LCZ_5_frac_500m
+    - LCZ_6_frac_500m
+    - LCZ_7_frac_500m
+    - LCZ_8_frac_500m
+    - LCZ_9_frac_500m
+    - LCZ_10_frac_500m
+    - LCZ_11_frac_500m
+    - LCZ_12_frac_500m
+    - LCZ_13_frac_500m
+    - LCZ_14_frac_500m
+    - LCZ_15_frac_500m
+    - LCZ_16_frac_500m
+    - LCZ_17_frac_500m
+
+fusion:
+  nhead: 4
+  dropout: 0.1
+  gate_init_bias: -2.0
+
+loss:
+  type: residual_physics
+  lambda_wind: 1.0
+  lambda_extreme: 0.0
+  lambda_residual_weighted: 0.0
+  lambda_temporal: 0.10
+  lambda_temporal_weighted: 0.0
+  lambda_roughness: 0.02
+  lambda_amplitude: 0.05
+  lambda_gradient_amplitude: 0.0
+  lambda_residual_corr: 0.0
+  lambda_temporal_gradient_corr: 0.0
+  amplitude_eps: 0.0001
+  lambda_vertical: 0.05
+  lambda_consistency: 0.0
+  residual_weight:
+    alpha: 1.0
+    gamma: 1.0
+    q_ref: 1.0
+    max_weight: 5.0
+  temporal_weight:
+    alpha: 1.0
+    gamma: 1.0
+    q_ref: 1.0
+    max_weight: 5.0

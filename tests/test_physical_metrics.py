@@ -55,6 +55,35 @@ def test_physical_metric_sums_include_speed_and_gradient_metrics():
     assert metrics["RMSE_ms"] == pytest.approx(1.0)
     assert metrics["u_MAE_ms"] == pytest.approx(1.0)
     assert metrics["v_MAE_ms"] == pytest.approx(1.0)
+    assert metrics["global_flattened_ACC"] == pytest.approx(1.0)
     assert metrics["temporal_gradient_MAE_ms"] == pytest.approx(0.0)
     assert metrics["residual_ACC"] == pytest.approx(1.0)
     assert math.isnan(metrics["temporal_gradient_ACC"])
+
+
+def test_global_flattened_acc_is_masked_and_combines_batches():
+    target = torch.tensor(
+        [[[[0.0, 1.0]], [[2.0, 3.0]], [[4.0, 5.0]], [[6.0, 7.0]], [[100.0, 200.0]]]]
+    )
+    pred = 2.0 * target
+    pred[:, -1] = -100.0
+    mask = torch.ones_like(target, dtype=torch.bool)
+    mask[:, -1] = False
+
+    sums = empty_physical_metric_sums()
+    add_metric_sums(sums, physical_metric_sums(pred[:, :2], target[:, :2], mask[:, :2]))
+    add_metric_sums(sums, physical_metric_sums(pred[:, 2:], target[:, 2:], mask[:, 2:]))
+    metrics = finalize_physical_metrics(sums)
+
+    assert metrics["global_flattened_ACC"] == pytest.approx(1.0)
+    assert metrics["valid_global_flattened_values"] == 8.0
+
+
+def test_global_flattened_acc_is_nan_for_constant_prediction():
+    pred = torch.ones(1, 3, 1, 2)
+    target = torch.arange(6.0).reshape(1, 3, 1, 2)
+    mask = torch.ones_like(target, dtype=torch.bool)
+
+    metrics = finalize_physical_metrics(physical_metric_sums(pred, target, mask))
+
+    assert math.isnan(metrics["global_flattened_ACC"])
